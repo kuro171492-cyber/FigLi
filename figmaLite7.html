@@ -1,0 +1,935 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { 
+  Hand, 
+  MousePointer2, 
+  Square, 
+  Circle, 
+  Triangle, 
+  Minus, 
+  Trash2,
+  FileImage,
+  Settings2,
+  X,
+  Lock,
+  Unlock,
+  RotateCw,
+  Droplets,
+  Type,
+  Layers,
+  Eye,
+  EyeOff,
+  PenTool,
+  Link,
+  Pentagon,
+  Check,
+  Move,
+  Hash,
+  Sun,
+  Palette
+} from 'lucide-react';
+
+const generateId = () => Math.random().toString(36).substring(2, 9);
+
+const SHAPE_TYPES = { 
+  RECT: 'rect', 
+  CIRCLE: 'circle', 
+  TRIANGLE: 'triangle', 
+  LINE: 'line',
+  POLY: 'poly',
+  IMAGE: 'image'
+};
+const TOOLS = { PAN: 'pan', SELECT: 'select', POLY_DRAW: 'poly_draw' };
+
+export default function App() {
+  const [stage, setStage] = useState({ x: 20, y: 80, scale: 0.5 });
+  const [shapes, setShapes] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [activeTool, setActiveTool] = useState(TOOLS.SELECT);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showLayers, setShowLayers] = useState(false);
+  const [keepAspectRatio, setKeepAspectRatio] = useState(true);
+  
+  const [polyPoints, setPolyPoints] = useState([]);
+  
+  const containerRef = useRef(null);
+  const [isInteracting, setIsInteracting] = useState(false);
+
+  const touchState = useRef({
+    initialDist: 0,
+    initialScale: 0,
+    initialX: 0,
+    initialY: 0,
+    initialStageX: 0,
+    initialStageY: 0
+  });
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const container = containerRef.current.getBoundingClientRect();
+        
+        // Масштабируем изображение, чтобы оно поместилось в текущий вид
+        const viewW = container.width / stage.scale;
+        const viewH = container.height / stage.scale;
+        
+        let imgScale = 1;
+        if (img.width > viewW * 0.8 || img.height > viewH * 0.8) {
+           imgScale = Math.min((viewW * 0.8) / img.width, (viewH * 0.8) / img.height);
+        }
+        
+        const finalW = img.width * imgScale;
+        const finalH = img.height * imgScale;
+        
+        const centerX = (container.width / 2 - stage.x) / stage.scale;
+        const centerY = (container.height / 2 - stage.y) / stage.scale;
+
+        const newImageShape = {
+          id: generateId(),
+          type: SHAPE_TYPES.IMAGE,
+          index: shapes.length + 1,
+          src: event.target.result,
+          x: centerX - finalW / 2,
+          y: centerY - finalH / 2,
+          w: finalW,
+          h: finalH,
+          rotation: 0,
+          opacity: 100,
+          isLocked: false,
+          isVisible: true,
+          // Новые параметры фильтров изображения
+          hue: 0,
+          saturation: 100,
+          brightness: 100,
+          invert: false
+        };
+        
+        // Изображения всегда добавляются в начало массива (ниже фигур), 
+        // но выше других ранее добавленных изображений
+        setShapes(prev => {
+          const images = prev.filter(s => s.type === SHAPE_TYPES.IMAGE);
+          const vectors = prev.filter(s => s.type !== SHAPE_TYPES.IMAGE);
+          return [...images, newImageShape, ...vectors];
+        });
+        
+        setSelectedId(newImageShape.id);
+        setActiveTool(TOOLS.SELECT);
+        e.target.value = ''; // Сбрасываем input для возможности повторной загрузки
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const addShape = (type) => {
+    if (type === SHAPE_TYPES.POLY) {
+      setActiveTool(TOOLS.POLY_DRAW);
+      setPolyPoints([]);
+      setSelectedId(null);
+      return;
+    }
+
+    const container = containerRef.current.getBoundingClientRect();
+    const centerX = (container.width / 2 - stage.x) / stage.scale;
+    const centerY = (container.height / 2 - stage.y) / stage.scale;
+    
+    const isLine = type === SHAPE_TYPES.LINE;
+    const isTriangle = type === SHAPE_TYPES.TRIANGLE;
+    
+    const defaultWidth = 100;
+    const defaultHeight = isLine ? 2 : (isTriangle ? defaultWidth * (Math.sqrt(3) / 2) : 100);
+
+    const newShape = {
+      id: generateId(),
+      type,
+      index: shapes.length + 1,
+      x: centerX - defaultWidth / 2,
+      y: centerY - defaultHeight / 2,
+      w: defaultWidth,
+      h: defaultHeight,
+      x2: isLine ? centerX + 50 : null,
+      y2: isLine ? centerY : null,
+      rotation: 0,
+      fill: isLine ? 'transparent' : '#3b82f6',
+      stroke: '#3b82f6',
+      strokeWidth: 2,
+      divisions: 1, 
+      opacity: 60,
+      isLocked: false,
+      isVisible: true
+    };
+    setShapes([...shapes, newShape]);
+    setSelectedId(newShape.id);
+    setActiveTool(TOOLS.SELECT);
+  };
+
+  const finalizePoly = (closed = true) => {
+    if (polyPoints.length < (closed ? 3 : 2)) {
+      setActiveTool(TOOLS.SELECT);
+      setPolyPoints([]);
+      return;
+    }
+
+    const MERGE_THRESHOLD = 10; 
+    const mergedPoints = [];
+    
+    for (let i = 0; i < polyPoints.length; i++) {
+      const current = polyPoints[i];
+      if (mergedPoints.length === 0) {
+        mergedPoints.push(current);
+      } else {
+        const last = mergedPoints[mergedPoints.length - 1];
+        const dist = Math.hypot(current.x - last.x, current.y - last.y);
+        if (dist > MERGE_THRESHOLD) {
+          mergedPoints.push(current);
+        }
+      }
+    }
+
+    if (closed && mergedPoints.length > 2) {
+      const first = mergedPoints[0];
+      const last = mergedPoints[mergedPoints.length - 1];
+      const dist = Math.hypot(first.x - last.x, first.y - last.y);
+      if (dist <= MERGE_THRESHOLD) {
+        mergedPoints.pop();
+      }
+    }
+
+    const xs = mergedPoints.map(p => p.x);
+    const ys = mergedPoints.map(p => p.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const maxX = Math.max(...xs);
+    const maxY = Math.max(...ys);
+    const width = Math.max(maxX - minX, 1);
+    const height = Math.max(maxY - minY, 1);
+
+    const normalizedPoints = mergedPoints.map(p => ({
+      x: p.x - minX,
+      y: p.y - minY
+    }));
+
+    const newShape = {
+      id: generateId(),
+      type: SHAPE_TYPES.POLY,
+      index: shapes.length + 1,
+      x: minX,
+      y: minY,
+      w: width,
+      h: height,
+      points: normalizedPoints,
+      isClosed: closed,
+      rotation: 0,
+      fill: closed ? '#3b82f6' : 'transparent',
+      stroke: '#3b82f6',
+      strokeWidth: 2,
+      opacity: 60,
+      isLocked: false,
+      isVisible: true
+    };
+
+    setShapes([...shapes, newShape]);
+    setSelectedId(newShape.id);
+    setPolyPoints([]);
+    setActiveTool(TOOLS.SELECT);
+  };
+
+  const handleCanvasMouseDown = (e) => {
+    if (e.target.closest('button') || e.target.closest('input')) return;
+
+    if (activeTool === TOOLS.POLY_DRAW) {
+      if (e.type === 'touchstart') e.preventDefault();
+      const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+      const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+      if (clientX === undefined) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const clickX = (clientX - rect.left - stage.x) / stage.scale;
+      const clickY = (clientY - rect.top - stage.y) / stage.scale;
+      if (polyPoints.length >= 3) {
+        const first = polyPoints[0];
+        const dist = Math.hypot(clickX - first.x, clickY - first.y);
+        if (dist < 20 / stage.scale) {
+          finalizePoly(true);
+          return;
+        }
+      }
+      setPolyPoints(prev => [...prev, { x: clickX, y: clickY }]);
+    } else {
+      setSelectedId(null);
+    }
+  };
+
+  const deleteShape = (id) => {
+    setShapes(prev => prev.filter(s => s.id !== id));
+    if (selectedId === id) setSelectedId(null);
+  };
+
+  const updateShapeColor = (id, color) => {
+    setShapes(prev => prev.map(s => 
+      s.id === id 
+        ? { ...s, stroke: color, fill: (s.type === 'line' || (s.type === 'poly' && !s.isClosed)) ? 'transparent' : color } 
+        : s
+    ));
+  };
+
+  const handleCanvasTouchStart = (e) => {
+    if (activeTool === TOOLS.POLY_DRAW) {
+      handleCanvasMouseDown(e);
+      return;
+    }
+    if (e.touches.length === 1 && activeTool === TOOLS.PAN) {
+      const touch = e.touches[0];
+      touchState.current = {
+        initialX: touch.clientX,
+        initialY: touch.clientY,
+        initialStageX: stage.x,
+        initialStageY: stage.y
+      };
+    } else if (e.touches.length === 2) {
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      const midX = (t1.clientX + t2.clientX) / 2;
+      const midY = (t1.clientY + t2.clientY) / 2;
+      touchState.current = {
+        initialDist: dist,
+        initialScale: stage.scale,
+        initialX: midX,
+        initialY: midY,
+        initialStageX: stage.x,
+        initialStageY: stage.y
+      };
+    }
+  };
+
+  const handleCanvasTouchMove = (e) => {
+    if (activeTool === TOOLS.POLY_DRAW) return;
+    if (e.touches.length === 1 && activeTool === TOOLS.PAN) {
+      const touch = e.touches[0];
+      const dx = touch.clientX - touchState.current.initialX;
+      const dy = touch.clientY - touchState.current.initialY;
+      setStage(s => ({ ...s, x: touchState.current.initialStageX + dx, y: touchState.current.initialStageY + dy }));
+    } else if (e.touches.length === 2) {
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      const midX = (t1.clientX + t2.clientX) / 2;
+      const midY = (t1.clientY + t2.clientY) / 2;
+      const scaleChange = dist / touchState.current.initialDist;
+      const newScale = Math.min(Math.max(0.1, touchState.current.initialScale * scaleChange), 5);
+      const rect = containerRef.current.getBoundingClientRect();
+      const originX = midX - rect.left;
+      const originY = midY - rect.top;
+      const dx = (originX - touchState.current.initialStageX) * (newScale / touchState.current.initialScale);
+      const dy = (originY - touchState.current.initialStageY) * (newScale / touchState.current.initialScale);
+      setStage({ scale: newScale, x: originX - dx, y: originY - dy });
+    }
+  };
+
+  const handleShapeInteraction = (e, id, mode, extra = null) => {
+    if (activeTool === TOOLS.POLY_DRAW) return;
+    const shape = shapes.find(s => s.id === id);
+    if (!shape || !shape.isVisible) return;
+    
+    if (shape.isLocked && mode !== 'select-only') return;
+
+    if (e.type === 'touchstart') e.preventDefault();
+    e.stopPropagation();
+    
+    setIsInteracting(true);
+    setSelectedId(id);
+    
+    if (mode === 'select-only') { 
+      setIsInteracting(false); 
+      return; 
+    }
+    
+    const isTouch = e.type.startsWith('touch');
+    if (isTouch && e.touches.length > 1) return;
+    const startX = isTouch ? e.touches[0].clientX : e.clientX;
+    const startY = isTouch ? e.touches[0].clientY : e.clientY;
+    const initial = JSON.parse(JSON.stringify(shape)); 
+    
+    const onMove = (moveEvent) => {
+      const isMoveTouch = moveEvent.type.startsWith('touch');
+      if (isMoveTouch && moveEvent.touches.length > 1) return;
+      const curX = isMoveTouch ? moveEvent.touches[0].clientX : moveEvent.clientX;
+      const curY = isMoveTouch ? moveEvent.touches[0].clientY : moveEvent.clientY;
+      const dxGlobal = (curX - startX) / stage.scale;
+      const dyGlobal = (curY - startY) / stage.scale;
+      
+      setShapes(prev => prev.map(s => {
+        if (s.id !== id) return s;
+        if (mode === 'move') {
+          const res = { ...s, x: initial.x + dxGlobal, y: initial.y + dyGlobal };
+          if (s.type === 'line') {
+            res.x2 = (initial.x2 || 0) + dxGlobal;
+            res.y2 = (initial.y2 || 0) + dyGlobal;
+          }
+          return res;
+        } 
+        if (mode === 'resize') {
+          const angleRad = (initial.rotation * Math.PI) / 180;
+          const cosA = Math.cos(angleRad);
+          const sinA = Math.sin(angleRad);
+          const dxLocal = dxGlobal * cosA + dyGlobal * sinA;
+          const dyLocal = -dxGlobal * sinA + dyGlobal * cosA;
+          let newW = Math.max(20, initial.w + dxLocal * 2);
+          let newH = Math.max(20, initial.h + dyLocal * 2);
+          
+          // Для изображений всегда сохраняем пропорции
+          if ((keepAspectRatio || s.type === SHAPE_TYPES.IMAGE) && initial.w !== 0 && initial.h !== 0) {
+            const ratio = initial.w / initial.h;
+            if (Math.abs(dxLocal) > Math.abs(dyLocal)) newH = newW / ratio;
+            else newW = newH * ratio;
+          }
+          return { ...s, w: newW, h: newH };
+        }
+        if (mode === 'rotate') {
+          const centerX = initial.x + initial.w / 2;
+          const centerY = initial.y + initial.h / 2;
+          const currentMouseX = (curX - stage.x) / stage.scale;
+          const currentMouseY = (curY - stage.y) / stage.scale;
+          const angle = Math.atan2(currentMouseY - centerY, currentMouseX - centerX);
+          return { ...s, rotation: (angle * 180 / Math.PI) + 90 };
+        }
+        if (mode === 'line-point') {
+          return extra === 'start' 
+            ? { ...s, x: initial.x + dxGlobal, y: initial.y + dyGlobal }
+            : { ...s, x2: (initial.x2 || 0) + dxGlobal, y2: (initial.y2 || 0) + dyGlobal };
+        }
+        if (mode === 'poly-point') {
+          const newPoints = [...s.points];
+          newPoints[extra] = {
+            x: initial.points[extra].x + dxGlobal,
+            y: initial.points[extra].y + dyGlobal
+          };
+          return { ...s, points: newPoints };
+        }
+        return s;
+      }));
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+      setIsInteracting(false);
+      if (mode === 'poly-point') {
+        setShapes(prev => prev.map(s => {
+          if (s.id !== id) return s;
+          const xs = s.points.map(p => p.x);
+          const ys = s.points.map(p => p.y);
+          const minX = Math.min(...xs);
+          const minY = Math.min(...ys);
+          return {
+            ...s,
+            x: s.x + minX,
+            y: s.y + minY,
+            w: Math.max(Math.max(...xs) - minX, 1),
+            h: Math.max(Math.max(...ys) - minY, 1),
+            points: s.points.map(p => ({ x: p.x - minX, y: p.y - minY }))
+          };
+        }));
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+  };
+
+  const toggleLock = (id) => {
+    setShapes(prev => prev.map(s => s.id === id ? {...s, isLocked: !s.isLocked} : s));
+  };
+
+  const toggleVisibility = (id) => {
+    setShapes(prev => prev.map(s => s.id === id ? {...s, isVisible: !s.isVisible} : s));
+    if (selectedId === id) setSelectedId(null);
+  };
+
+  const toggleAllVisibility = () => {
+    const anyVisible = shapes.some(s => s.isVisible);
+    setShapes(prev => prev.map(s => ({ ...s, isVisible: !anyVisible })));
+    if (anyVisible) setSelectedId(null);
+  };
+
+  const selectedShape = shapes.find(s => s.id === selectedId);
+
+  const getShapeIcon = (shape) => {
+    if (!shape) return null;
+    const defaultColor = shape.stroke || '#9ca3af';
+    const props = { size: 18, style: { color: defaultColor } };
+    
+    switch(shape.type) {
+      case 'rect': return <Square {...props} fill={defaultColor} fillOpacity={0.2} />;
+      case 'circle': return <Circle {...props} fill={defaultColor} fillOpacity={0.2} />;
+      case 'triangle': return <Triangle {...props} fill={defaultColor} fillOpacity={0.2} />;
+      case 'line': return <Minus {...props} className="rotate-45" />;
+      case 'poly': return <Pentagon {...props} fill={defaultColor} fillOpacity={0.2} />;
+      case 'image': return (
+        <img 
+          src={shape.src} 
+          className="w-full h-full object-cover rounded-[inherit]" 
+          style={{ 
+            filter: `hue-rotate(${shape.hue || 0}deg) saturate(${shape.saturation ?? 100}%) brightness(${shape.brightness ?? 100}%) invert(${shape.invert ? 100 : 0}%)` 
+          }} 
+          alt="thumb" 
+        />
+      );
+      default: return null;
+    }
+  };
+
+  const renderLineWithDivisions = (shape, shapeStyle) => {
+    const x1 = shape.x - shapeStyle.left;
+    const y1 = shape.y - shapeStyle.top;
+    const x2 = shape.x2 - shapeStyle.left;
+    const y2 = shape.y2 - shapeStyle.top;
+    const divisions = shape.divisions || 1; 
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const angle = Math.atan2(dy, dx);
+    const markLength = 10;
+    const longMarkLength = 20;
+
+    const getMarkCoords = (x, y, len) => {
+      const perpA = angle + Math.PI / 2;
+      return {
+        x1: x + Math.cos(perpA) * (len / 2),
+        y1: y + Math.sin(perpA) * (len / 2),
+        x2: x - Math.cos(perpA) * (len / 2),
+        y2: y - Math.sin(perpA) * (len / 2)
+      };
+    };
+
+    const mainMarks = [
+      getMarkCoords(x1, y1, longMarkLength), 
+      getMarkCoords(x1 + dx * 0.5, y1 + dy * 0.5, longMarkLength), 
+      getMarkCoords(x2, y2, longMarkLength)
+    ];
+
+    const divisionLines = [];
+    if (divisions > 1) {
+      const stepSize = 1 / (divisions + 1);
+      for (let j = 1; j <= divisions; j++) {
+        const t = j * stepSize;
+        if (Math.abs(t - 0.5) < 0.01) continue;
+        const mx = x1 + dx * t;
+        const my = y1 + dy * t;
+        divisionLines.push(getMarkCoords(mx, my, markLength));
+      }
+    }
+
+    return (
+      <>
+        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={shape.stroke} strokeWidth={shape.strokeWidth} strokeLinecap="round" />
+        {mainMarks.map((m, idx) => (
+          <line key={`main-${idx}`} x1={m.x1} y1={m.y1} x2={m.x2} y2={m.y2} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />
+        ))}
+        {divisionLines.map((l, idx) => (
+          <line key={`div-${idx}`} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />
+        ))}
+      </>
+    );
+  };
+
+  const anyVisible = shapes.some(s => s.isVisible);
+
+  return (
+    <div className="w-full h-screen bg-[#0a0a0a] flex flex-col overflow-hidden text-white touch-none font-sans select-none pb-[env(safe-area-inset-bottom)]">
+      
+      {/* ВЕРХНЯЯ ПАНЕЛЬ */}
+      <div className="h-14 border-b border-white/5 flex items-center justify-between px-3 shrink-0 bg-[#111] z-50">
+        <div className="flex items-center gap-2">
+          <label className="p-2 bg-blue-600 rounded-lg active:scale-90 transition-all cursor-pointer mr-2">
+            <FileImage size={18} />
+            <input type="file" className="hidden" onChange={handleImageUpload} accept="image/*" />
+          </label>
+          <div className="flex bg-[#222] rounded-lg p-0.5 border border-white/10">
+            <button onClick={() => { setActiveTool(TOOLS.SELECT); setPolyPoints([]); }} className={`p-2 rounded-md transition-all ${activeTool === TOOLS.SELECT ? 'bg-white/10 text-white' : 'text-gray-500'}`}><MousePointer2 size={18}/></button>
+            <button onClick={() => { setActiveTool(TOOLS.PAN); setPolyPoints([]); }} className={`p-2 rounded-md transition-all ${activeTool === TOOLS.PAN ? 'bg-white/10 text-white' : 'text-gray-500'}`}><Hand size={18}/></button>
+          </div>
+          
+          {shapes.length > 0 && (
+            <button 
+              onClick={toggleAllVisibility}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all active:scale-90 ${anyVisible ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-blue-500/20 border-blue-500/30 text-blue-400'}`}
+              title={anyVisible ? "Скрыть все фигуры" : "Показать все фигуры"}
+            >
+              {anyVisible ? <Eye size={18}/> : <EyeOff size={18}/>}
+              <span className="text-[10px] font-bold uppercase hidden sm:block">
+                {anyVisible ? 'Hide All' : 'Show All'}
+              </span>
+            </button>
+          )}
+        </div>
+
+        {activeTool === TOOLS.POLY_DRAW && (
+          <div className="flex items-center gap-2 bg-blue-600/20 px-3 py-1.5 rounded-full border border-blue-500/30">
+            <span className="text-xs font-bold text-blue-400">Создание фигуры ({polyPoints.length})</span>
+            {polyPoints.length >= 2 && (
+              <button onClick={() => finalizePoly(false)} className="bg-blue-500 text-white p-1 rounded-full active:scale-90 transition-all"><Check size={14} /></button>
+            )}
+            <button onClick={() => { setActiveTool(TOOLS.SELECT); setPolyPoints([]); }} className="text-gray-400 p-1 hover:text-white"><X size={14} /></button>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          {selectedShape && (
+            <button onClick={() => { setShowSettings(!showSettings); setShowLayers(false); }} className={`p-2 rounded-lg transition-all ${showSettings ? 'bg-blue-500 text-white' : 'bg-[#222] text-gray-400'}`}><Settings2 size={20}/></button>
+          )}
+        </div>
+      </div>
+
+      {/* РАБОЧАЯ ОБЛАСТЬ */}
+      <div 
+        ref={containerRef}
+        className="flex-1 relative overflow-hidden bg-[#0a0a0a]"
+        onMouseDown={handleCanvasMouseDown}
+        onTouchStart={handleCanvasTouchStart}
+        onTouchMove={handleCanvasTouchMove}
+      >
+        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle, white 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
+
+        <div 
+          className="absolute origin-top-left will-change-transform"
+          style={{ transform: `translate3d(${stage.x}px, ${stage.y}px, 0) scale(${stage.scale})` }}
+        >
+          {polyPoints.length > 0 && (
+            <svg className="absolute overflow-visible pointer-events-none" style={{ left: 0, top: 0, width: 1, height: 1 }}>
+              <polyline
+                points={polyPoints.map(p => `${p.x},${p.y}`).join(' ')}
+                fill="none"
+                stroke="#3b82f6"
+                strokeWidth={2 / stage.scale}
+                strokeDasharray="5,5"
+              />
+              {polyPoints.map((p, i) => (
+                <circle
+                  key={i}
+                  cx={p.x}
+                  cy={p.y}
+                  r={(i === 0 ? 8 : 4) / stage.scale}
+                  fill={i === 0 ? "#10b981" : "#3b82f6"}
+                  stroke="white"
+                  strokeWidth={1 / stage.scale}
+                  className={i === 0 && polyPoints.length >= 3 ? "animate-pulse cursor-pointer pointer-events-auto" : ""}
+                />
+              ))}
+            </svg>
+          )}
+
+          {shapes.filter(s => s.isVisible).map(shape => {
+            const isSelected = selectedId === shape.id;
+            const isLine = shape.type === 'line';
+            const isPoly = shape.type === 'poly';
+            const isImage = shape.type === 'image';
+            const canRotate = shape.type !== 'line' && shape.type !== 'poly'; 
+            
+            const shapeStyle = isLine ? {
+              left: Math.min(shape.x, shape.x2), 
+              top: Math.min(shape.y, shape.y2),
+              width: Math.max(Math.abs(shape.x2 - shape.x), 1), 
+              height: Math.max(Math.abs(shape.y2 - shape.y), 1),
+            } : {
+              left: shape.x, top: shape.y, width: shape.w, height: shape.h,
+            };
+
+            return (
+              <div
+                key={shape.id}
+                className={`absolute ${isSelected ? 'z-20' : 'z-10'} touch-none`}
+                onMouseDown={(e) => handleShapeInteraction(e, shape.id, shape.isLocked ? 'select-only' : 'move')}
+                onTouchStart={(e) => handleShapeInteraction(e, shape.id, shape.isLocked ? 'select-only' : 'move')}
+                style={{
+                  ...shapeStyle,
+                  opacity: shape.opacity / 100,
+                  transform: isLine ? 'none' : `rotate(${shape.rotation}deg)`,
+                  transformOrigin: 'center center',
+                  outline: isSelected ? `2px solid ${shape.isLocked ? '#fb923c' : '#3b82f6'}` : 'none',
+                  outlineOffset: '2px',
+                  pointerEvents: shape.isLocked ? 'none' : 'auto',
+                  cursor: shape.isLocked ? 'default' : 'move'
+                }}
+              >
+                {isImage ? (
+                  <img 
+                    src={shape.src} 
+                    style={{ 
+                      width: '100%', 
+                      height: '100%', 
+                      objectFit: 'fill', 
+                      display: 'block',
+                      filter: `hue-rotate(${shape.hue || 0}deg) saturate(${shape.saturation ?? 100}%) brightness(${shape.brightness ?? 100}%) invert(${shape.invert ? 100 : 0}%)`
+                    }} 
+                    draggable={false} 
+                    alt="Layer" 
+                  />
+                ) : (
+                  <svg width="100%" height="100%" viewBox={`0 0 ${shapeStyle.width} ${shapeStyle.height}`} preserveAspectRatio="none" className="overflow-visible block">
+                    {shape.type === 'rect' && <rect width="100%" height="100%" fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />}
+                    {shape.type === 'circle' && <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />}
+                    {shape.type === 'triangle' && <polygon points={`${shape.w/2},0 ${shape.w},${shape.h} 0,${shape.h}`} fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />}
+                    {isLine && renderLineWithDivisions(shape, shapeStyle)}
+                    {isPoly && (
+                      <polygon 
+                        points={shape.points.map(p => `${p.x},${p.y}`).join(' ')} 
+                        fill={shape.isClosed ? shape.fill : 'transparent'} 
+                        stroke={shape.stroke} 
+                        strokeWidth={shape.strokeWidth}
+                      />
+                    )}
+                  </svg>
+                )}
+
+                {isSelected && !shape.isLocked && (
+                  <>
+                    <button 
+                      className={`absolute -top-10 -right-2 p-2 rounded-full shadow-lg border-2 border-[#0a0a0a] transition-all active:scale-95 bg-[#222] text-gray-400 hover:text-white pointer-events-auto`}
+                      onClick={(e) => { e.stopPropagation(); toggleLock(shape.id); }}
+                    >
+                      <Unlock size={14} />
+                    </button>
+                    {canRotate && (
+                      <div className="absolute -top-10 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-auto" onMouseDown={(e) => handleShapeInteraction(e, shape.id, 'rotate')} onTouchStart={(e) => handleShapeInteraction(e, shape.id, 'rotate')}>
+                        <div className="w-0.5 h-4 bg-blue-500" />
+                        <div className="w-6 h-6 bg-white border-2 border-blue-500 rounded-full flex items-center justify-center text-blue-500 shadow-lg cursor-alias"><RotateCw size={10} /></div>
+                      </div>
+                    )}
+                    
+                    {isPoly && shape.points.map((p, idx) => (
+                      <div 
+                        key={idx}
+                        className="absolute w-6 h-6 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center cursor-crosshair group z-30 pointer-events-auto"
+                        style={{ left: p.x, top: p.y }}
+                        onMouseDown={(e) => handleShapeInteraction(e, shape.id, 'poly-point', idx)}
+                        onTouchStart={(e) => handleShapeInteraction(e, shape.id, 'poly-point', idx)}
+                      >
+                        <div className="w-4 h-4 bg-white border-2 border-blue-500 rounded-full shadow-lg group-hover:scale-150 transition-transform" />
+                      </div>
+                    ))}
+
+                    {isLine && (
+                      <>
+                        <div className="absolute w-8 h-8 flex items-center justify-center pointer-events-auto" style={{ left: shape.x <= shape.x2 ? -16 : (shapeStyle.width - 16), top: shape.y <= shape.y2 ? -16 : (shapeStyle.height - 16) }} onMouseDown={(e) => handleShapeInteraction(e, shape.id, 'line-point', 'start')} onTouchStart={(e) => handleShapeInteraction(e, shape.id, 'line-point', 'start')}><div className="w-4 h-4 bg-white border-2 border-blue-500 rounded-full shadow-lg" /></div>
+                        <div className="absolute w-8 h-8 flex items-center justify-center pointer-events-auto" style={{ left: shape.x > shape.x2 ? -16 : (shapeStyle.width - 16), top: shape.y > shape.y2 ? -16 : (shapeStyle.height - 16) }} onMouseDown={(e) => handleShapeInteraction(e, shape.id, 'line-point', 'end')} onTouchStart={(e) => handleShapeInteraction(e, shape.id, 'line-point', 'end')}><div className="w-4 h-4 bg-white border-2 border-blue-500 rounded-full shadow-lg" /></div>
+                      </>
+                    )}
+
+                    {!isLine && !isPoly && (
+                      <div className="absolute -right-2 -bottom-2 w-6 h-6 bg-white border-2 border-blue-500 rounded shadow-lg cursor-se-resize pointer-events-auto" onMouseDown={(e) => handleShapeInteraction(e, shape.id, 'resize')} onTouchStart={(e) => handleShapeInteraction(e, shape.id, 'resize')} />
+                    )}
+                  </>
+                )}
+                {isSelected && shape.isLocked && (
+                   <button 
+                      className={`absolute -top-10 -right-2 p-2 rounded-full shadow-lg border-2 border-[#0a0a0a] transition-all active:scale-95 bg-orange-500 text-white pointer-events-auto`}
+                      onClick={(e) => { e.stopPropagation(); toggleLock(shape.id); }}
+                    >
+                      <Lock size={14} />
+                    </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="absolute bottom-24 right-4 bg-white/5 backdrop-blur px-2 py-1 rounded text-[10px] text-gray-400 font-mono select-none">{Math.round(stage.scale * 100)}%</div>
+      </div>
+
+      {/* НИЖНЯЯ ПАНЕЛЬ С УЧЕТОМ SAFE AREA */}
+      <div 
+        className="bg-[#111] border-t border-white/5 flex items-center justify-around px-2 z-50 shrink-0"
+        style={{ 
+          height: 'calc(4rem + env(safe-area-inset-bottom))', 
+          paddingBottom: 'env(safe-area-inset-bottom)' 
+        }}
+      >
+        <button 
+          onClick={() => { setShowLayers(!showLayers); setShowSettings(false); }} 
+          className={`p-3 rounded-xl transition-all active:scale-95 ${showLayers ? 'bg-blue-500 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+        >
+          <Layers size={22}/>
+        </button>
+        <div className="w-px h-8 bg-white/5" />
+        <button onClick={() => addShape(SHAPE_TYPES.RECT)} className="p-3 text-gray-500 hover:text-white active:scale-95 transition-all"><Square size={20}/></button>
+        <button onClick={() => addShape(SHAPE_TYPES.CIRCLE)} className="p-3 text-gray-500 hover:text-white active:scale-95 transition-all"><Circle size={20}/></button>
+        <button onClick={() => addShape(SHAPE_TYPES.TRIANGLE)} className="p-3 text-gray-500 hover:text-white active:scale-95 transition-all"><Triangle size={20}/></button>
+        <button onClick={() => addShape(SHAPE_TYPES.LINE)} className="p-3 text-gray-500 hover:text-white active:scale-95 transition-all"><Minus className="rotate-45" size={24}/></button>
+        <button onClick={() => addShape(SHAPE_TYPES.POLY)} className={`p-3 transition-all active:scale-95 ${activeTool === TOOLS.POLY_DRAW ? 'text-blue-500' : 'text-gray-500 hover:text-white'}`}><Pentagon size={22}/></button>
+      </div>
+
+      {showLayers && (
+        <div className="absolute inset-y-0 right-0 w-80 bg-[#111]/95 backdrop-blur-xl border-l border-white/10 z-[60] flex flex-col animate-in slide-in-from-right duration-200 shadow-2xl pb-[env(safe-area-inset-bottom)]">
+          <div className="p-5 border-b border-white/5 flex justify-between items-center bg-[#111]">
+            <div className="flex flex-col">
+              <span className="font-bold text-xs text-blue-500 uppercase tracking-widest">Слои</span>
+              <span className="text-[10px] text-gray-500 mt-1">{shapes.length} объектов</span>
+            </div>
+            
+            <div className="flex items-center gap-1">
+              <button onClick={() => setShowLayers(false)} className="text-gray-500 p-2 hover:bg-white/5 rounded-lg active:scale-90 transition-all"><X size={20}/></button>
+            </div>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {shapes.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full opacity-20 text-center px-6">
+                <Layers size={48} className="mb-4" />
+                <p className="text-sm font-medium">Нет слоев</p>
+              </div>
+            ) : (
+              [...shapes].reverse().map(shape => (
+                <div 
+                  key={shape.id} 
+                  onClick={(e) => { e.stopPropagation(); setSelectedId(shape.id); }}
+                  className={`flex items-center gap-1.5 p-1.5 rounded-xl transition-all cursor-pointer border ${selectedId === shape.id ? 'bg-blue-600/15 border-blue-500/40' : 'hover:bg-white/5 border-transparent'}`}
+                >
+                  <div className="w-8 flex justify-center shrink-0">
+                    <span className={`text-[11px] font-mono font-black ${shape.isVisible ? 'text-gray-400' : 'text-gray-700'}`}>
+                      {shape.index}
+                    </span>
+                  </div>
+                  <label className={`w-10 h-10 flex items-center justify-center shrink-0 rounded-lg border border-white/5 transition-opacity cursor-pointer relative overflow-hidden ${shape.isVisible ? 'opacity-100 bg-white/5' : 'opacity-30'}`}>
+                    {getShapeIcon(shape)}
+                    {shape.type !== 'image' && (
+                      <input type="color" className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" value={shape.stroke} onChange={(e) => updateShapeColor(shape.id, e.target.value)} onClick={(e) => e.stopPropagation()} />
+                    )}
+                  </label>
+                  <button onClick={(e) => { e.stopPropagation(); toggleVisibility(shape.id); }} className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all active:scale-90 ${shape.isVisible ? 'text-blue-400 bg-blue-500/10' : 'text-gray-700 bg-white/5'}`}><Eye size={18}/></button>
+                  <button onClick={(e) => { e.stopPropagation(); toggleLock(shape.id); }} className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all active:scale-90 ${shape.isLocked ? 'text-orange-500 bg-orange-500/15' : 'text-gray-700 bg-white/5'}`}><Lock size={18}/></button>
+                  <button onClick={(e) => { e.stopPropagation(); deleteShape(shape.id); }} className="w-10 h-10 flex items-center justify-center text-gray-700 hover:text-red-500 hover:bg-red-500/15 rounded-lg transition-all active:scale-90"><Trash2 size={18}/></button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {selectedShape && showSettings && (
+        <div 
+          className="absolute inset-x-0 bottom-0 bg-[#1a1a1a] rounded-t-3xl border-t border-white/10 z-[100] pt-4 px-6 animate-in slide-in-from-bottom duration-200 shadow-2xl overflow-y-auto max-h-[85vh]"
+          style={{ paddingBottom: 'calc(2.5rem + env(safe-area-inset-bottom))' }}
+        >
+          <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mb-6 shrink-0 cursor-pointer" onClick={() => setShowSettings(false)} />
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-blue-500/20 rounded-xl flex items-center justify-center text-blue-500 overflow-hidden">
+                {getShapeIcon(selectedShape)}
+              </div>
+              <h3 className="text-sm font-bold">Параметры #{selectedShape.index}</h3>
+            </div>
+            <button onClick={() => setShowSettings(false)} className="p-2 text-gray-500 hover:text-white bg-white/5 rounded-full transition-all"><X size={18} /></button>
+          </div>
+
+          <div className="flex flex-col gap-6">
+            {selectedShape.type === 'line' && (
+              <div className="bg-white/5 p-4 rounded-2xl space-y-4">
+                <div className="flex items-center gap-3 mb-1">
+                  <Hash size={18} className="text-blue-500" />
+                  <span className="text-sm font-medium">Количество делений ({selectedShape.divisions + 1})</span>
+                </div>
+                <div className="flex items-center gap-4">
+                  <span className="text-xs text-gray-500 font-mono w-4">1</span>
+                  <input type="range" min="1" max="6" step="1" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.divisions || 1} onChange={e => setShapes(prev => prev.map(s => s.id === selectedId ? {...s, divisions: Number(e.target.value)} : s))} onClick={e => e.stopPropagation()} />
+                  <span className="text-xs text-gray-500 font-mono w-4">6</span>
+                </div>
+              </div>
+            )}
+            
+            {/* Блок фильтров для изображений */}
+            {selectedShape.type === 'image' && (
+              <div className="bg-white/5 p-4 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">Коррекция цвета</span>
+                  <button 
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      setShapes(prev => prev.map(s => s.id === selectedId ? {...s, invert: !s.invert} : s)); 
+                    }} 
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${selectedShape.invert ? 'bg-white text-black' : 'bg-[#222] text-gray-300 hover:bg-[#333]'}`}
+                  >
+                    Инверсия
+                  </button>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  <Palette size={16} className="text-gray-500" />
+                  <div className="flex-1">
+                    <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Оттенок (Hue)</span><span>{selectedShape.hue || 0}°</span></div>
+                    <input type="range" min="0" max="360" value={selectedShape.hue || 0} onChange={e => setShapes(prev => prev.map(s => s.id === selectedId ? {...s, hue: Number(e.target.value)} : s))} className="w-full h-1.5 rounded-lg appearance-none" style={{ background: 'linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)' }} />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Droplets size={16} className="text-gray-500" />
+                  <div className="flex-1">
+                    <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Насыщенность</span><span>{selectedShape.saturation ?? 100}%</span></div>
+                    <input type="range" min="0" max="200" value={selectedShape.saturation ?? 100} onChange={e => setShapes(prev => prev.map(s => s.id === selectedId ? {...s, saturation: Number(e.target.value)} : s))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Sun size={16} className="text-gray-500" />
+                  <div className="flex-1">
+                    <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Яркость</span><span>{selectedShape.brightness ?? 100}%</span></div>
+                    <input type="range" min="0" max="200" value={selectedShape.brightness ?? 100} onChange={e => setShapes(prev => prev.map(s => s.id === selectedId ? {...s, brightness: Number(e.target.value)} : s))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Если это НЕ изображение - показываем цвет */}
+              {selectedShape.type !== 'image' && (
+                <div className="flex items-center justify-between gap-4 bg-white/5 p-2 rounded-2xl">
+                   <div className="flex items-center gap-3 px-3">
+                     <Droplets size={18} className="text-gray-500" />
+                     <input type="color" className="w-10 h-10 bg-transparent border-0 rounded-lg cursor-pointer" value={selectedShape.stroke} onChange={e => updateShapeColor(selectedId, e.target.value)} onClick={e => e.stopPropagation()} />
+                   </div>
+                   <div className="w-px h-8 bg-white/10" />
+                   <div className="flex-1 flex items-center gap-3 px-3">
+                     <Type size={18} className="text-gray-500" />
+                     <input type="range" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.opacity} onChange={e => setShapes(prev => prev.map(s => s.id === selectedId ? {...s, opacity: Number(e.target.value)} : s))} onClick={e => e.stopPropagation()} />
+                   </div>
+                </div>
+              )}
+              
+              {/* Если это изображение - показываем только прозрачность на всю ширину ячейки */}
+              {selectedShape.type === 'image' && (
+                <div className="flex items-center justify-between gap-4 bg-white/5 p-2 rounded-2xl">
+                   <div className="flex-1 flex items-center gap-3 px-3">
+                     <Type size={18} className="text-gray-500" />
+                     <span className="text-[10px] text-gray-500">Прозрачность</span>
+                     <input type="range" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.opacity} onChange={e => setShapes(prev => prev.map(s => s.id === selectedId ? {...s, opacity: Number(e.target.value)} : s))} onClick={e => e.stopPropagation()} />
+                   </div>
+                </div>
+              )}
+
+              {/* Толщина линии не нужна для изображений */}
+              {selectedShape.type !== 'image' && (
+                <div className="flex items-center justify-between gap-4 bg-white/5 p-2 rounded-2xl">
+                  <div className="flex-1 flex items-center gap-3 px-4">
+                     <PenTool size={18} className="text-gray-500 shrink-0" />
+                     <input type="range" min="1" max="20" step="1" className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.strokeWidth} onChange={e => setShapes(prev => prev.map(s => s.id === selectedId ? {...s, strokeWidth: Number(e.target.value)} : s))} onClick={e => e.stopPropagation()} />
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex gap-3">
+              <button onClick={(e) => { e.stopPropagation(); toggleLock(selectedId); }} className={`flex-1 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all active:scale-95 ${selectedShape.isLocked ? 'bg-orange-500/20 text-orange-500 border border-orange-500/30' : 'bg-white/5 text-gray-400'}`}>
+                  {selectedShape.isLocked ? <Lock size={18} /> : <Unlock size={18} />}
+                  <span className="text-sm">{selectedShape.isLocked ? 'Заблокировано' : 'Разблокировано'}</span>
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); deleteShape(selectedId); }} className="p-4 bg-red-500/10 text-red-500 rounded-2xl active:bg-red-500/20 transition-all border border-red-500/10"><Trash2 size={22}/></button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
