@@ -1717,7 +1717,7 @@ function App() {
 
               {imageQuickMenu.control === 'transparency' && (() => {
                 const center = 128;
-                const arcRadius = 102;
+                const arcRadius = 135;
                 const cfg = getQuickControlConfig('transparency', quickImageTarget);
                 const transparencyValue = cfg ? cfg.value : 0;
                 const angle = QUICK_MENU_END_ANGLE - (transparencyValue / 100) * QUICK_MENU_SWEEP;
@@ -1742,7 +1742,7 @@ function App() {
 
               {['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control) && (() => {
                 const center = 128;
-                const arcRadius = 102;
+                const arcRadius = 135;
                 const control = imageQuickMenu.control;
                 const cfg = getQuickControlConfig(control, quickImageTarget);
                 if (!cfg) return null;
