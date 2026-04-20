@@ -1,32 +1,46 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Hand, 
-  MousePointer2, 
-  Square, 
-  Circle, 
-  Triangle, 
-  Minus, 
-  Trash2,
-  FileImage,
-  Settings2,
-  X,
-  Lock,
-  Unlock,
-  RotateCw,
-  Droplets,
-  Type,
-  Layers,
-  Eye,
-  EyeOff,
-  PenTool,
-  Link,
-  Pentagon,
-  Check,
-  Move,
-  Hash,
-  Sun,
-  Palette
-} from 'lucide-react';
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>FigmaLite Mobile Debug</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="m-0 p-0 bg-[#0a0a0a]">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+const { useReducer, useRef } = React;
+
+const iconStyle = "inline-flex items-center justify-center leading-none";
+const Hand = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>✋</span>;
+const MousePointer2 = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>🖱️</span>;
+const Square = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>◻</span>;
+const Circle = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>◯</span>;
+const Triangle = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>△</span>;
+const Minus = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>／</span>;
+const Trash2 = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>🗑</span>;
+const FileImage = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>🖼</span>;
+const Settings2 = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>⚙</span>;
+const X = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>✕</span>;
+const Lock = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>🔒</span>;
+const Unlock = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>🔓</span>;
+const RotateCw = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>⟳</span>;
+const Droplets = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>💧</span>;
+const Type = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>◐</span>;
+const Layers = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>☰</span>;
+const Eye = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>👁</span>;
+const EyeOff = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>🙈</span>;
+const PenTool = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>✎</span>;
+const Pentagon = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>⬠</span>;
+const Check = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>✓</span>;
+const Hash = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>#</span>;
+const Sun = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>☀</span>;
+const Palette = ({ size = 16 }) => <span className={iconStyle} style={{ fontSize: size }}>🎨</span>;
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
@@ -40,19 +54,83 @@ const SHAPE_TYPES = {
 };
 const TOOLS = { PAN: 'pan', SELECT: 'select', POLY_DRAW: 'poly_draw' };
 
-export default function App() {
-  const [stage, setStage] = useState({ x: 20, y: 80, scale: 0.5 });
-  const [shapes, setShapes] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
-  const [activeTool, setActiveTool] = useState(TOOLS.SELECT);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showLayers, setShowLayers] = useState(false);
-  const [keepAspectRatio, setKeepAspectRatio] = useState(true);
-  
-  const [polyPoints, setPolyPoints] = useState([]);
+const initialAppState = {
+  stage: { x: 20, y: 80, scale: 0.5 },
+  shapes: [],
+  selectedId: null,
+  activeTool: TOOLS.SELECT,
+  showSettings: false,
+  showLayers: false,
+  keepAspectRatio: true,
+  polyPoints: [],
+  isInteracting: false
+};
+
+function appReducer(state, action) {
+  switch (action.type) {
+    case 'SET_STAGE':
+      return {
+        ...state,
+        stage: typeof action.payload === 'function'
+          ? action.payload(state.stage)
+          : action.payload
+      };
+    case 'SET_SHAPES':
+      return {
+        ...state,
+        shapes: typeof action.payload === 'function'
+          ? action.payload(state.shapes)
+          : action.payload
+      };
+    case 'SET_SELECTED_ID':
+      return { ...state, selectedId: action.payload };
+    case 'SET_ACTIVE_TOOL':
+      return { ...state, activeTool: action.payload };
+    case 'SET_SHOW_SETTINGS':
+      return { ...state, showSettings: action.payload };
+    case 'SET_SHOW_LAYERS':
+      return { ...state, showLayers: action.payload };
+    case 'SET_KEEP_ASPECT_RATIO':
+      return { ...state, keepAspectRatio: action.payload };
+    case 'SET_POLY_POINTS':
+      return {
+        ...state,
+        polyPoints: typeof action.payload === 'function'
+          ? action.payload(state.polyPoints)
+          : action.payload
+      };
+    case 'SET_IS_INTERACTING':
+      return { ...state, isInteracting: action.payload };
+    default:
+      return state;
+  }
+}
+
+function App() {
+  const [state, dispatch] = useReducer(appReducer, initialAppState);
+  const {
+    stage,
+    shapes,
+    selectedId,
+    activeTool,
+    showSettings,
+    showLayers,
+    keepAspectRatio,
+    polyPoints,
+    isInteracting
+  } = state;
+
+  const setStage = (payload) => dispatch({ type: 'SET_STAGE', payload });
+  const setShapes = (payload) => dispatch({ type: 'SET_SHAPES', payload });
+  const setSelectedId = (payload) => dispatch({ type: 'SET_SELECTED_ID', payload });
+  const setActiveTool = (payload) => dispatch({ type: 'SET_ACTIVE_TOOL', payload });
+  const setShowSettings = (payload) => dispatch({ type: 'SET_SHOW_SETTINGS', payload });
+  const setShowLayers = (payload) => dispatch({ type: 'SET_SHOW_LAYERS', payload });
+  const setKeepAspectRatio = (payload) => dispatch({ type: 'SET_KEEP_ASPECT_RATIO', payload });
+  const setPolyPoints = (payload) => dispatch({ type: 'SET_POLY_POINTS', payload });
+  const setIsInteracting = (payload) => dispatch({ type: 'SET_IS_INTERACTING', payload });
   
   const containerRef = useRef(null);
-  const [isInteracting, setIsInteracting] = useState(false);
 
   const touchState = useRef({
     initialDist: 0,
@@ -933,3 +1011,7 @@ export default function App() {
     </div>
   );
 }
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
