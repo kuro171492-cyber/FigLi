@@ -821,6 +821,7 @@
       const [activeHandle, setActiveHandle] = useState(null);
       const [layerColorPickerShapeId, setLayerColorPickerShapeId] = useState(null);
       const [imageQuickMenu, setImageQuickMenu] = useState(null);
+      const [interaction, setInteraction] = useState({ isDragging: false, startAngle: null, initialValue: null });
       const {
         stage,
         shapes,
@@ -1172,16 +1173,42 @@
         if (!exists) setImageQuickMenu(null);
       }, [imageQuickMenu, shapes]);
 
+      // Функция для вычисления угла из значения
+      const angleFromValue = useCallback((value, min, max) => {
+        if (max === min) return QUICK_MENU_START_ANGLE;
+        const normalized = (value - min) / (max - min);
+        return QUICK_MENU_START_ANGLE + normalized * QUICK_MENU_SWEEP;
+      }, []);
+
       const openImageQuickMenu = useCallback((shapeId, point) => {
         if (activeToolRef.current === TOOLS.PAN) return;
         setSelectedId(shapeId);
+        
+        // Получаем текущее значение из shape для синхронизации угла
+        const shape = shapes.find(s => s.id === shapeId);
+        let currentValue = 0;
+        let min = 0, max = 360;
+        
+        if (shape && shape.type === SHAPE_TYPES.IMAGE) {
+          // Для hue используем начальное значение
+          currentValue = shape.hue ?? 0;
+          min = 0;
+          max = 360;
+        }
+        
+        const initialAngle = angleFromValue(currentValue, min, max);
+        
         setImageQuickMenu({
           shapeId,
           x: point.x,
           y: point.y,
-          control: 'hue'
+          control: 'hue',
+          initialAngle
         });
-      }, [activeToolRef, setSelectedId]);
+        
+        // Сбрасываем interaction state
+        setInteraction({ isDragging: false, startAngle: null, initialValue: null });
+      }, [activeToolRef, setSelectedId, shapes, angleFromValue]);
 
       const applyQuickImageValue = useCallback((control, value) => {
         if (!imageQuickMenu) return;
@@ -1245,26 +1272,49 @@
         return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
       };
 
-      const applyTransparencyFromPoint = useCallback((clientX, clientY) => {
+      // Обновлённая функция для проецирования угла на дугу с поддержкой drag-режима
+      const getAngleOnArc = useCallback((angle, isDragging = false) => {
+        const start = QUICK_MENU_START_ANGLE;
+        const end = QUICK_MENU_END_ANGLE;
+
+        // нормализуем в диапазон [0..360)
+        const a = (angle + 360) % 360;
+
+        // если угол вне дуги — привязываем к ближайшей границе
+        if (a < start && a > end) {
+          const distToStart = Math.abs(a - start);
+          const distToEnd = Math.abs(a - end);
+          return distToStart < distToEnd ? start : end;
+        }
+
+        return a;
+      }, [QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE]);
+
+      const applyTransparencyFromPoint = useCallback((clientX, clientY, isInitialDrag = false) => {
         if (!imageQuickMenu) return;
         const dx = clientX - imageQuickMenu.x;
         const dy = clientY - imageQuickMenu.y;
 
         const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
         const normalized = (rawAngle + 360) % 360;
-        const angle = getAngleOnArc(normalized);
+        const angle = getAngleOnArc(normalized, interaction.isDragging);
+        
         const transparency = ((QUICK_MENU_END_ANGLE - angle) / QUICK_MENU_SWEEP) * 100;
         applyQuickImageValue('transparency', clamp(transparency, 0, 100));
-      }, [imageQuickMenu, applyQuickImageValue, QUICK_MENU_SWEEP]);
+      }, [imageQuickMenu, applyQuickImageValue, QUICK_MENU_SWEEP, getAngleOnArc, interaction.isDragging]);
 
-      const applyHSLFromPoint = useCallback((clientX, clientY, control) => {
+      const applyHSLFromPoint = useCallback((clientX, clientY, control, isInitialDrag = false) => {
         if (!imageQuickMenu || !quickImageTarget) return;
+        
+        // Если не в режиме drag, игнорируем движение (предотвращаем скачки при переключении)
+        if (!interaction.isDragging && !isInitialDrag) return;
+        
         const dx = clientX - imageQuickMenu.x;
         const dy = clientY - imageQuickMenu.y;
 
         const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
         const normalized = (rawAngle + 360) % 360;
-        const angle = getAngleOnArc(normalized);
+        const angle = getAngleOnArc(normalized, interaction.isDragging);
 
         let min, max;
         if (control === 'hue') { min = 0; max = 360; }
@@ -1274,7 +1324,7 @@
 
         const value = ((angle - QUICK_MENU_START_ANGLE) / QUICK_MENU_SWEEP) * (max - min) + min;
         applyQuickImageValue(control, clamp(value, min, max));
-      }, [imageQuickMenu, applyQuickImageValue, quickImageTarget, QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE, QUICK_MENU_SWEEP, clamp]);
+      }, [imageQuickMenu, applyQuickImageValue, quickImageTarget, QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE, QUICK_MENU_SWEEP, clamp, getAngleOnArc, interaction.isDragging]);
 
       const getShapeIcon = (shape) => {
         if (!shape) return null;
@@ -1821,35 +1871,55 @@
                       e.preventDefault();
                       e.stopPropagation();
                       if (!imageQuickMenu.control) return;
-                      if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.clientX, e.clientY);
-                      else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.clientX, e.clientY, imageQuickMenu.control);
+                      
+                      // Начинаем drag-режим
+                      setInteraction({ isDragging: true, startAngle: null, initialValue: null });
+                      
+                      if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.clientX, e.clientY, true);
+                      else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.clientX, e.clientY, imageQuickMenu.control, true);
                     }}
                     onMouseMove={(e) => {
                       if (e.buttons === 1) {
                         e.preventDefault();
                         e.stopPropagation();
-                        if (!imageQuickMenu.control) return;
+                        if (!imageQuickMenu.control || !interaction.isDragging) return;
                         if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.clientX, e.clientY);
                         else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.clientX, e.clientY, imageQuickMenu.control);
                       }
+                    }}
+                    onMouseUp={() => {
+                      setInteraction({ isDragging: false, startAngle: null, initialValue: null });
+                    }}
+                    onMouseLeave={() => {
+                      setInteraction({ isDragging: false, startAngle: null, initialValue: null });
                     }}
                     onTouchStart={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
                       if (!imageQuickMenu.control) return;
+                      
+                      // Начинаем drag-режим
+                      setInteraction({ isDragging: true, startAngle: null, initialValue: null });
+                      
                       if (e.touches && e.touches[0]) {
-                        if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY);
-                        else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, imageQuickMenu.control);
+                        if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY, true);
+                        else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, imageQuickMenu.control, true);
                       }
                     }}
                     onTouchMove={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      if (!imageQuickMenu.control) return;
+                      if (!imageQuickMenu.control || !interaction.isDragging) return;
                       if (e.touches && e.touches[0]) {
                         if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY);
                         else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, imageQuickMenu.control);
                       }
+                    }}
+                    onTouchEnd={() => {
+                      setInteraction({ isDragging: false, startAngle: null, initialValue: null });
+                    }}
+                    onTouchCancel={() => {
+                      setInteraction({ isDragging: false, startAngle: null, initialValue: null });
                     }}
                   >
                     <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10">
@@ -1882,11 +1952,42 @@
                                 key={key}
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  
+                                  // Получаем текущее значение из shape для синхронизации угла
+                                  const shape = quickImageTarget;
+                                  let currentValue = 0;
+                                  let min = 0, max = 360;
+                                  
+                                  if (shape) {
+                                    if (key === 'hue') {
+                                      currentValue = shape.hue ?? 0;
+                                      min = 0;
+                                      max = 360;
+                                    } else if (key === 'saturation') {
+                                      currentValue = shape.saturation ?? 100;
+                                      min = 0;
+                                      max = 200;
+                                    } else if (key === 'lightness') {
+                                      currentValue = shape.brightness ?? 100;
+                                      min = 0;
+                                      max = 200;
+                                    } else if (key === 'transparency') {
+                                      currentValue = 100 - (shape.opacity ?? 100);
+                                      min = 0;
+                                      max = 100;
+                                    }
+                                  }
+                                  
+                                  const newInitialAngle = angleFromValue(currentValue, min, max);
+                                  
                                   setImageQuickMenu((prev) => {
                                     if (!prev) return prev;
-                                    // Просто переключаем контроль, значения берутся из shape
-                                    return { ...prev, control: key };
+                                    // Переключаем контроль и обновляем initialAngle для нового контрола
+                                    return { ...prev, control: key, initialAngle: newInitialAngle };
                                   });
+                                  
+                                  // Сбрасываем interaction state при переключении
+                                  setInteraction({ isDragging: false, startAngle: null, initialValue: null });
                                 }}
                                 className={`absolute w-10 h-10 rounded-full border bg-[#242826] text-sm font-semibold pointer-events-auto ${isActive ? activeClass : 'border-white/10 text-cyan-400'}`}
                                 style={positions[idx]}
