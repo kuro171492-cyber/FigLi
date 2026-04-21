@@ -1696,31 +1696,6 @@ function App() {
             style={{ left: imageQuickMenu.x, top: imageQuickMenu.y, transform: 'translate(-50%, -50%)' }}
           >
             <div className="relative w-80 h-80">
-              {(() => {
-                const controls = [
-                  { key: 'hue', label: 'H', angle: 210 },
-                  { key: 'saturation', label: 'S', angle: 250 },
-                  { key: 'lightness', label: 'L', angle: 290 },
-                  { key: 'transparency', label: 'Tr', angle: 330 }
-                ];
-                const center = 160;
-                const buttonRadius = 100;
-                return controls.map((control) => {
-                  const point = polarToCartesian(center, center, buttonRadius, control.angle);
-                  const isActive = imageQuickMenu.control === control.key;
-                  return (
-                    <button
-                      key={control.key}
-                      onClick={() => setImageQuickMenu((prev) => prev ? { ...prev, control: control.key } : prev)}
-                      className={`absolute w-16 h-16 rounded-full border bg-[#242826] ${isActive ? 'border-cyan-300 text-cyan-300' : 'border-white/10 text-cyan-400'} text-lg font-semibold`}
-                      style={{ left: point.x, top: point.y, transform: 'translate(-50%, -50%)' }}
-                    >
-                      {control.label}
-                    </button>
-                  );
-                });
-              })()}
-
               {imageQuickMenu.control === 'transparency' && (() => {
                 const center = 160;
                 const arcRadius = 135;
@@ -1732,8 +1707,9 @@ function App() {
                 const valueArc = describeArcPath(center, center, arcRadius, angle, QUICK_MENU_END_ANGLE);
                 return (
                   <svg
-                    className="absolute inset-0 pointer-events-none"
+                    className="absolute inset-0"
                     viewBox="0 0 320 320"
+                    style={{ pointerEvents: 'auto' }}
                     onMouseDown={(e) => applyTransparencyFromPoint(e.clientX, e.clientY)}
                     onMouseMove={(e) => { if (e.buttons === 1) applyTransparencyFromPoint(e.clientX, e.clientY); }}
                     onTouchStart={(e) => { if (e.touches && e.touches[0]) applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY); }}
@@ -1766,8 +1742,9 @@ function App() {
                 
                 return (
                   <svg
-                    className="absolute inset-0 pointer-events-none"
+                    className="absolute inset-0"
                     viewBox="0 0 320 320"
+                    style={{ pointerEvents: 'auto' }}
                     onMouseDown={(e) => applyHSLFromPoint(e.clientX, e.clientY, control)}
                     onMouseMove={(e) => { if (e.buttons === 1) applyHSLFromPoint(e.clientX, e.clientY, control); }}
                     onTouchStart={(e) => { if (e.touches && e.touches[0]) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, control); }}
@@ -1780,10 +1757,28 @@ function App() {
                 );
               })()}
 
-              <button
-                onClick={() => setImageQuickMenu(null)}
-                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border border-white/10 text-black bg-[#2d322f] text-xl font-bold z-10"
-              >X</button>
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-1 z-10">
+                <button
+                  onClick={() => setImageQuickMenu(null)}
+                  className="w-12 h-12 rounded-full border border-white/10 text-black bg-[#2d322f] text-lg font-bold flex items-center justify-center"
+                >X</button>
+                {['hue', 'saturation', 'lightness', 'transparency'].map((key) => {
+                  const control = { hue: 'H', saturation: 'S', lightness: 'L', transparency: 'Tr' }[key];
+                  const isActive = imageQuickMenu.control === key;
+                  let activeClass = 'border-cyan-300 text-cyan-300';
+                  if (key === 'hue') activeClass = 'border-pink-400 text-pink-400';
+                  if (key === 'saturation') activeClass = 'border-purple-400 text-purple-400';
+                  if (key === 'lightness') activeClass = 'border-amber-400 text-amber-400';
+                  if (key === 'transparency') activeClass = 'border-cyan-300 text-cyan-300';
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setImageQuickMenu((prev) => prev ? { ...prev, control: key } : prev)}
+                      className={`w-10 h-10 rounded-full border bg-[#242826] text-sm font-semibold ${isActive ? activeClass : 'border-white/10 text-cyan-400'}`}
+                    >{control}</button>
+                  );
+                })}
+              </div>
             </div>
           </div>
           {imageQuickMenu.control && ['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control) && (() => {
