@@ -1752,22 +1752,30 @@ function App() {
               <div
                 className="absolute inset-0 z-10"
                 onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.clientX, e.clientY);
                   else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.clientX, e.clientY, imageQuickMenu.control);
                 }}
                 onMouseMove={(e) => {
                   if (e.buttons === 1) {
+                    e.preventDefault();
+                    e.stopPropagation();
                     if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.clientX, e.clientY);
                     else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.clientX, e.clientY, imageQuickMenu.control);
                   }
                 }}
                 onTouchStart={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   if (e.touches && e.touches[0]) {
                     if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY);
                     else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, imageQuickMenu.control);
                   }
                 }}
                 onTouchMove={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   if (e.touches && e.touches[0]) {
                     if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY);
                     else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, imageQuickMenu.control);
@@ -1791,16 +1799,16 @@ function App() {
                         if (key === 'transparency') activeClass = 'border-cyan-300 text-cyan-300';
                         
                         const positions = [
-                          { right: 'auto', left: '-52px', top: '50%', transform: 'translateY(-50%)' },
-                          { right: '-52px', left: 'auto', top: '50%', transform: 'translateY(-50%)' },
-                          { right: 'auto', left: '50%', top: '-52px', transform: 'translateX(-50%)' },
-                          { right: 'auto', left: '50%', bottom: '-52px', transform: 'translateX(-50%)' }
+                          { right: 'auto', left: '-44px', top: '50%', transform: 'translateY(-50%)' },
+                          { right: '-44px', left: 'auto', top: '50%', transform: 'translateY(-50%)' },
+                          { right: 'auto', left: '50%', top: '-44px', transform: 'translateX(-50%)' },
+                          { right: 'auto', left: '50%', bottom: '-44px', transform: 'translateX(-50%)' }
                         ];
                         
                         return (
                           <button
                             key={key}
-                            onClick={() => setImageQuickMenu((prev) => prev ? { ...prev, control: key } : prev)}
+                            onClick={(e) => { e.stopPropagation(); setImageQuickMenu((prev) => prev ? { ...prev, control: key } : prev); }}
                             className={`absolute w-10 h-10 rounded-full border bg-[#242826] text-sm font-semibold pointer-events-auto ${isActive ? activeClass : 'border-white/10 text-cyan-400'}`}
                             style={positions[idx]}
                           >{control}</button>
