@@ -1,4 +1,4 @@
-import { useReducer, useRef, useEffect, useMemo, useCallback, useState } from 'react';
+import React, { useReducer, useRef, useEffect, useMemo, useCallback, useState } from 'react';
 
 const Icon = ({ name, size = 16, className = "", style = {}, ...rest }) => (
     <span
@@ -114,7 +114,17 @@ const renderLineWithDivisions = (shape, shapeStyle) => {
     );
   };
 
-const ShapeItem = React.memo(function ShapeItem({ shape, isSelected, onShapeInteraction, onToggleLock, stageScale = 1, activeHandle = null, onImageLongPress = null }) {
+interface ShapeItemProps {
+  shape: any;
+  isSelected: boolean;
+  onShapeInteraction: (e: any, id: any, mode: any, extra?: any) => void;
+  onToggleLock: (id: any) => void;
+  stageScale?: number;
+  activeHandle: any;
+  onImageLongPress?: ((shapeId: any, point: any) => void) | null;
+}
+
+const ShapeItem = React.memo(function ShapeItem({ shape, isSelected, onShapeInteraction, onToggleLock, stageScale = 1, activeHandle = null, onImageLongPress = null }: ShapeItemProps) {
     const isLine = shape.type === 'line';
     const isPoly = shape.type === 'poly';
     const isImage = shape.type === 'image';
@@ -515,7 +525,7 @@ function useStageGestures({ activeToolRef, touchState, stageRef, setStage, conta
     }, [flushStageUpdate, activeToolRef, stageRef, touchState]);
 
     const handleCanvasTouchCancel = useCallback(() => {
-      handleCanvasTouchEnd();
+      handleCanvasTouchEnd(null as any);
     }, [handleCanvasTouchEnd]);
 
     return { handleCanvasTouchStart, handleCanvasTouchMove, handleCanvasTouchEnd, handleCanvasTouchCancel };
@@ -850,7 +860,7 @@ function App() {
             id: generateId(),
             type: SHAPE_TYPES.IMAGE,
             index: shapes.length + 1,
-            src: event.target.result,
+            src: event.target.result as string,
             x: centerX - finalW / 2,
             y: centerY - finalH / 2,
             w: finalW,
@@ -878,7 +888,7 @@ function App() {
           setActiveTool(TOOLS.SELECT);
           e.target.value = ''; // Reset input so the same file can be selected again.
         };
-        img.src = event.target.result;
+        img.src = event.target.result as string;
       };
       reader.readAsDataURL(file);
     };
