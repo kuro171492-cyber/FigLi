@@ -2,9 +2,29 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>FigmaLite Mobile Debug</title>
+  <style>
+    /* Блокируем стандартные жесты браузера на мобильных устройствах */
+    html, body {
+      touch-action: none;
+      overscroll-behavior: none;
+      overflow: hidden;
+    }
+    /* Предотвращаем выделение текста и контекстное меню */
+    * {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    input, textarea {
+      -webkit-user-select: auto;
+      user-select: auto;
+    }
+  </style>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:FILL@0" />
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -185,7 +205,8 @@ const ShapeItem = React.memo(function ShapeItem({ shape, isSelected, onShapeInte
   const moveImageLongPress = useCallback((clientX, clientY) => {
     if (!touchStartRef.current) return;
     const dist = Math.hypot(clientX - touchStartRef.current.x, clientY - touchStartRef.current.y);
-    if (dist > 10) clearLongPress();
+    // Увеличиваем порог срабатывания до 20px чтобы избежать случайных сбросов
+    if (dist > 20) clearLongPress();
   }, [clearLongPress]);
 
   useEffect(() => () => clearLongPress(), [clearLongPress]);
@@ -233,15 +254,23 @@ const ShapeItem = React.memo(function ShapeItem({ shape, isSelected, onShapeInte
           onContextMenu={(e) => e.preventDefault()}
           onDragStart={(e) => e.preventDefault()}
           onTouchStart={(e) => {
+            if (e.cancelable) e.preventDefault();
             if (!e.touches || !e.touches[0]) return;
             startImageLongPress(e.touches[0].clientX, e.touches[0].clientY);
           }}
           onTouchMove={(e) => {
+            if (e.cancelable) e.preventDefault();
             if (!e.touches || !e.touches[0]) return;
             moveImageLongPress(e.touches[0].clientX, e.touches[0].clientY);
           }}
-          onTouchEnd={clearLongPress}
-          onTouchCancel={clearLongPress}
+          onTouchEnd={(e) => {
+            if (e.cancelable) e.preventDefault();
+            clearLongPress();
+          }}
+          onTouchCancel={(e) => {
+            if (e.cancelable) e.preventDefault();
+            clearLongPress();
+          }}
           onMouseDown={(e) => startImageLongPress(e.clientX, e.clientY)}
           onMouseMove={(e) => moveImageLongPress(e.clientX, e.clientY)}
           onMouseUp={clearLongPress}
@@ -1119,7 +1148,10 @@ function App() {
 
   const selectedShape = shapes.find(s => s.id === selectedId);
   const layerColorTarget = shapes.find(s => s.id === layerColorPickerShapeId) || null;
-  const quickImageTarget = imageQuickMenu ? shapes.find(s => s.id === imageQuickMenu.shapeId) : null;
+  // Используем useMemo для стабильности ссылки на quickImageTarget
+  const quickImageTarget = useMemo(() => {
+    return imageQuickMenu ? shapes.find(s => s.id === imageQuickMenu.shapeId) : null;
+  }, [imageQuickMenu, shapes]);
   const supportsFill = !!selectedShape && selectedShape.type !== 'line' && !(selectedShape.type === 'poly' && !selectedShape.isClosed);
 
   useEffect(() => {
@@ -1147,12 +1179,14 @@ function App() {
 
   const applyQuickImageValue = useCallback((control, value) => {
     if (!imageQuickMenu) return;
+    // Округляем значение для предотвращения микро-изменений
+    const roundedValue = Math.round(Number(value) * 10) / 10;
     updateShapeById(imageQuickMenu.shapeId, (s) => {
       if (s.type !== SHAPE_TYPES.IMAGE) return s;
-      if (control === 'hue') return { ...s, hue: Number(value) };
-      if (control === 'saturation') return { ...s, saturation: Number(value) };
-      if (control === 'lightness') return { ...s, brightness: Number(value) };
-      if (control === 'transparency') return { ...s, opacity: Math.max(0, 100 - Number(value)) };
+      if (control === 'hue') return { ...s, hue: Math.round(roundedValue) };
+      if (control === 'saturation') return { ...s, saturation: Math.round(roundedValue) };
+      if (control === 'lightness') return { ...s, brightness: Math.round(roundedValue) };
+      if (control === 'transparency') return { ...s, opacity: Math.max(0, 100 - Math.round(roundedValue)) };
       return s;
     });
   }, [imageQuickMenu, updateShapeById]);
@@ -1750,10 +1784,11 @@ function App() {
               })()}
 
               <div
-                className="absolute inset-0 z-10"
+                className="absolute inset-0 z-10 touch-none"
                 onMouseDown={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  if (!imageQuickMenu.control) return;
                   if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.clientX, e.clientY);
                   else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.clientX, e.clientY, imageQuickMenu.control);
                 }}
@@ -1761,6 +1796,7 @@ function App() {
                   if (e.buttons === 1) {
                     e.preventDefault();
                     e.stopPropagation();
+                    if (!imageQuickMenu.control) return;
                     if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.clientX, e.clientY);
                     else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.clientX, e.clientY, imageQuickMenu.control);
                   }
@@ -1768,6 +1804,7 @@ function App() {
                 onTouchStart={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  if (!imageQuickMenu.control) return;
                   if (e.touches && e.touches[0]) {
                     if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY);
                     else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, imageQuickMenu.control);
@@ -1776,6 +1813,7 @@ function App() {
                 onTouchMove={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  if (!imageQuickMenu.control) return;
                   if (e.touches && e.touches[0]) {
                     if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY);
                     else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, imageQuickMenu.control);
@@ -1808,7 +1846,14 @@ function App() {
                         return (
                           <button
                             key={key}
-                            onClick={(e) => { e.stopPropagation(); setImageQuickMenu((prev) => prev ? { ...prev, control: key } : prev); }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setImageQuickMenu((prev) => {
+                                if (!prev) return prev;
+                                // При переключении контроля сохраняем текущие значения shape
+                                return { ...prev, control: key };
+                              });
+                            }}
                             className={`absolute w-10 h-10 rounded-full border bg-[#242826] text-sm font-semibold pointer-events-auto ${isActive ? activeClass : 'border-white/10 text-cyan-400'}`}
                             style={positions[idx]}
                           >{control}</button>
