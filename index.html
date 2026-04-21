@@ -1027,6 +1027,7 @@ function App() {
       setPolyPoints(prev => [...prev, { x: clickX, y: clickY }]);
     } else {
       setSelectedId(null);
+      setActiveTool(TOOLS.PAN);
     }
   };
 
@@ -1093,8 +1094,13 @@ function App() {
       handleCanvasMouseDown(e);
       return;
     }
+    if (activeToolRef.current !== TOOLS.PAN) {
+      setSelectedId(null);
+      setActiveTool(TOOLS.PAN);
+      return;
+    }
     handleStageTouchStart(e);
-  }, [activeToolRef, handleCanvasMouseDown, handleStageTouchStart]);
+  }, [activeToolRef, handleCanvasMouseDown, handleStageTouchStart, setSelectedId, setActiveTool]);
 
   const toggleLock = useCallback((id) => {
     updateShapeById(id, (s) => ({ ...s, isLocked: !s.isLocked }));
