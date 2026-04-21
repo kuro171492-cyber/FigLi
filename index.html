@@ -1179,7 +1179,8 @@
           shapeId,
           x: point.x,
           y: point.y,
-          control: null
+          control: 'hue',
+          defaults: { hue: 0, saturation: 100, lightness: 100, transparency: 0 }
         });
       }, [activeToolRef, setSelectedId]);
 
@@ -1199,12 +1200,12 @@
 
       const getQuickControlConfig = useCallback((control, shape) => {
         if (!shape) return null;
-        if (control === 'hue') return { label: 'Hue', min: 0, max: 360, value: shape.hue || 0, suffix: 'deg' };
-        if (control === 'saturation') return { label: 'Saturation', min: 0, max: 200, value: shape.saturation ?? 100, suffix: '%' };
-        if (control === 'lightness') return { label: 'Lightness', min: 0, max: 200, value: shape.brightness ?? 100, suffix: '%' };
-        if (control === 'transparency') return { label: 'Transparency', min: 0, max: 100, value: 100 - (shape.opacity ?? 100), suffix: '%' };
+        if (control === 'hue') return { label: 'Hue', min: 0, max: 360, value: imageQuickMenu?.defaults?.hue ?? (shape.hue || 0), suffix: 'deg' };
+        if (control === 'saturation') return { label: 'Saturation', min: 0, max: 200, value: imageQuickMenu?.defaults?.saturation ?? (shape.saturation ?? 100), suffix: '%' };
+        if (control === 'lightness') return { label: 'Lightness', min: 0, max: 200, value: imageQuickMenu?.defaults?.lightness ?? (shape.brightness ?? 100), suffix: '%' };
+        if (control === 'transparency') return { label: 'Transparency', min: 0, max: 100, value: imageQuickMenu?.defaults?.transparency ?? (100 - (shape.opacity ?? 100)), suffix: '%' };
         return null;
-      }, []);
+      }, [imageQuickMenu]);
 
       const QUICK_MENU_START_ANGLE = 210;
       const QUICK_MENU_END_ANGLE = 330;
@@ -1860,8 +1861,18 @@
                                   e.stopPropagation();
                                   setImageQuickMenu((prev) => {
                                     if (!prev) return prev;
-                                    // При переключении контроля сохраняем текущие значения shape
-                                    return { ...prev, control: key };
+                                    // При переключении контроля сбрасываем к значениям по умолчанию
+                                    const defaults = prev.defaults || { hue: 0, saturation: 100, lightness: 100, transparency: 0 };
+                                    const newDefaults = { ...defaults };
+                                    // Если пользователь уже менял этот параметр, сохраняем его текущее значение из shape
+                                    const shape = shapesRef.current.find(s => s.id === prev.shapeId);
+                                    if (shape && shape.type === SHAPE_TYPES.IMAGE) {
+                                      if (key === 'hue') newDefaults.hue = shape.hue ?? 0;
+                                      if (key === 'saturation') newDefaults.saturation = shape.saturation ?? 100;
+                                      if (key === 'lightness') newDefaults.lightness = shape.brightness ?? 100;
+                                      if (key === 'transparency') newDefaults.transparency = 100 - (shape.opacity ?? 100);
+                                    }
+                                    return { ...prev, control: key, defaults: newDefaults };
                                   });
                                 }}
                                 className={`absolute w-10 h-10 rounded-full border bg-[#242826] text-sm font-semibold pointer-events-auto ${isActive ? activeClass : 'border-white/10 text-cyan-400'}`}
