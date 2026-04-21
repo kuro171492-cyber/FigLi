@@ -44,6 +44,14 @@ const Hash = (props) => <Icon name="tag" {...props} />;
 const Sun = (props) => <Icon name="light_mode" {...props} />;
 const Palette = (props) => <Icon name="palette" {...props} />;
 
+interface ImageQuickMenu {
+  shapeId: string;
+  x: number;
+  y: number;
+  control: string;
+  initialAngle?: number;
+}
+
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
 const SHAPE_TYPES = {
@@ -787,7 +795,7 @@ function App() {
     const [state, dispatch] = useReducer(appReducer, initialAppState);
     const [activeHandle, setActiveHandle] = useState(null);
     const [layerColorPickerShapeId, setLayerColorPickerShapeId] = useState<string | null>(null);
-    const [imageQuickMenu, setImageQuickMenu] = useState<{ shapeId: string; x: number; y: number; control: string; initialAngle?: number } | null>(null);
+    const [imageQuickMenu, setImageQuickMenu] = useState<ImageQuickMenu | null>(null);
     const [interaction, setInteraction] = useState({ isDragging: false, startAngle: null, initialValue: null });
     const {
       stage,
