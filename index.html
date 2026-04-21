@@ -1179,8 +1179,7 @@
           shapeId,
           x: point.x,
           y: point.y,
-          control: 'hue',
-          defaults: { hue: 0, saturation: 100, lightness: 100, transparency: 0 }
+          control: 'hue'
         });
       }, [activeToolRef, setSelectedId]);
 
@@ -1196,33 +1195,39 @@
           if (control === 'transparency') return { ...s, opacity: Math.max(0, 100 - Math.round(roundedValue)) };
           return s;
         });
-        // Обновляем defaults после применения значения, чтобы слайдер отображал актуальное значение
-        setImageQuickMenu(prev => {
-          if (!prev) return prev;
-          const newDefaults = { ...prev.defaults };
-          if (control === 'hue') newDefaults.hue = Math.round(roundedValue);
-          if (control === 'saturation') newDefaults.saturation = Math.round(roundedValue);
-          if (control === 'lightness') newDefaults.lightness = Math.round(roundedValue);
-          if (control === 'transparency') newDefaults.transparency = Math.round(roundedValue);
-          return { ...prev, defaults: newDefaults };
-        });
       }, [imageQuickMenu, updateShapeById]);
 
       const getQuickControlConfig = useCallback((control, shape) => {
         if (!shape) return null;
-        // Всегда используем defaults из imageQuickMenu, если они есть
-        // Это обеспечивает корректное отображение слайдера при переключении режимов
-        const defaults = imageQuickMenu?.defaults || { hue: 0, saturation: 100, lightness: 100, transparency: 0 };
-        if (control === 'hue') return { label: 'Hue', min: 0, max: 360, value: defaults.hue ?? (shape.hue || 0), suffix: 'deg' };
-        if (control === 'saturation') return { label: 'Saturation', min: 0, max: 200, value: defaults.saturation ?? (shape.saturation ?? 100), suffix: '%' };
-        if (control === 'lightness') return { label: 'Lightness', min: 0, max: 200, value: defaults.lightness ?? (shape.brightness ?? 100), suffix: '%' };
-        if (control === 'transparency') return { label: 'Transparency', min: 0, max: 100, value: defaults.transparency ?? (100 - (shape.opacity ?? 100)), suffix: '%' };
+        // Используем только значения из shape как единственный источник истины
+        if (control === 'hue') return { label: 'Hue', min: 0, max: 360, value: shape.hue ?? 0, suffix: 'deg' };
+        if (control === 'saturation') return { label: 'Saturation', min: 0, max: 200, value: shape.saturation ?? 100, suffix: '%' };
+        if (control === 'lightness') return { label: 'Lightness', min: 0, max: 200, value: shape.brightness ?? 100, suffix: '%' };
+        if (control === 'transparency') return { label: 'Transparency', min: 0, max: 100, value: 100 - (shape.opacity ?? 100), suffix: '%' };
         return null;
-      }, [imageQuickMenu]);
+      }, []);
 
       const QUICK_MENU_START_ANGLE = 210;
       const QUICK_MENU_END_ANGLE = 330;
       const QUICK_MENU_SWEEP = QUICK_MENU_END_ANGLE - QUICK_MENU_START_ANGLE;
+
+      // Функция для проецирования угла на дугу (вместо clamp)
+      const getAngleOnArc = (angle) => {
+        const start = QUICK_MENU_START_ANGLE;
+        const end = QUICK_MENU_END_ANGLE;
+
+        // нормализуем в диапазон [0..360)
+        const a = (angle + 360) % 360;
+
+        // если угол вне дуги — привязываем к ближайшей границе
+        if (a < start && a > end) {
+          const distToStart = Math.abs(a - start);
+          const distToEnd = Math.abs(a - end);
+          return distToStart < distToEnd ? start : end;
+        }
+
+        return a;
+      };
 
       const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
       const polarToCartesian = (cx, cy, radius, angleDeg) => {
@@ -1244,11 +1249,11 @@
         if (!imageQuickMenu) return;
         const dx = clientX - imageQuickMenu.x;
         const dy = clientY - imageQuickMenu.y;
-        if (Math.hypot(dx, dy) < 25) return;
+
         const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
         const normalized = (rawAngle + 360) % 360;
-        const clampedAngle = clamp(normalized, QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE);
-        const transparency = ((QUICK_MENU_END_ANGLE - clampedAngle) / QUICK_MENU_SWEEP) * 100;
+        const angle = getAngleOnArc(normalized);
+        const transparency = ((QUICK_MENU_END_ANGLE - angle) / QUICK_MENU_SWEEP) * 100;
         applyQuickImageValue('transparency', clamp(transparency, 0, 100));
       }, [imageQuickMenu, applyQuickImageValue, QUICK_MENU_SWEEP]);
 
@@ -1256,19 +1261,18 @@
         if (!imageQuickMenu || !quickImageTarget) return;
         const dx = clientX - imageQuickMenu.x;
         const dy = clientY - imageQuickMenu.y;
-        if (Math.hypot(dx, dy) < 25) return;
+
         const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
         const normalized = (rawAngle + 360) % 360;
-        const clampedAngle = clamp(normalized, QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE);
+        const angle = getAngleOnArc(normalized);
 
-        const defaults = imageQuickMenu.defaults || { hue: 0, saturation: 100, lightness: 100, transparency: 0 };
         let min, max;
         if (control === 'hue') { min = 0; max = 360; }
         else if (control === 'saturation') { min = 0; max = 200; }
         else if (control === 'lightness') { min = 0; max = 200; }
         else { return; }
 
-        const value = ((clampedAngle - QUICK_MENU_START_ANGLE) / QUICK_MENU_SWEEP) * (max - min) + min;
+        const value = ((angle - QUICK_MENU_START_ANGLE) / QUICK_MENU_SWEEP) * (max - min) + min;
         applyQuickImageValue(control, clamp(value, min, max));
       }, [imageQuickMenu, applyQuickImageValue, quickImageTarget, QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE, QUICK_MENU_SWEEP, clamp]);
 
@@ -1760,9 +1764,8 @@
                     const center = 160;
                     const arcRadius = 135;
                     const cfg = getQuickControlConfig('transparency', quickImageTarget);
-                    // Используем значение из defaults для отображения позиции слайдера
-                    const defaults = imageQuickMenu.defaults || { hue: 0, saturation: 100, lightness: 100, transparency: 0 };
-                    const transparencyValue = defaults.transparency ?? (cfg ? cfg.value : 0);
+                    // Используем значение из shape как единственный источник истины
+                    const transparencyValue = cfg ? cfg.value : 0;
                     const angle = QUICK_MENU_END_ANGLE - (transparencyValue / 100) * QUICK_MENU_SWEEP;
                     const knob = polarToCartesian(center, center, arcRadius, angle);
                     const backgroundArc = describeArcPath(center, center, arcRadius, QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE);
@@ -1786,13 +1789,8 @@
                     const control = imageQuickMenu.control;
                     const cfg = getQuickControlConfig(control, quickImageTarget);
                     if (!cfg) return null;
-                    // Используем значение из defaults для отображения позиции слайдера
-                    const defaults = imageQuickMenu.defaults || { hue: 0, saturation: 100, lightness: 100, transparency: 0 };
-                    let currentValue;
-                    if (control === 'hue') currentValue = defaults.hue ?? 0;
-                    else if (control === 'saturation') currentValue = defaults.saturation ?? 100;
-                    else if (control === 'lightness') currentValue = defaults.lightness ?? 100;
-                    else currentValue = cfg.value;
+                    // Используем значение из shape как единственный источник истины
+                    const currentValue = cfg.value;
                     const normalizedValue = (currentValue - cfg.min) / (cfg.max - cfg.min);
                     const angle = QUICK_MENU_START_ANGLE + normalizedValue * QUICK_MENU_SWEEP;
                     const knob = polarToCartesian(center, center, arcRadius, angle);
@@ -1886,10 +1884,8 @@
                                   e.stopPropagation();
                                   setImageQuickMenu((prev) => {
                                     if (!prev) return prev;
-                                    // При переключении контроля используем значения из defaults
-                                    // Это обеспечивает сохранение пользовательских настроек или значений по умолчанию
-                                    const defaults = prev.defaults || { hue: 0, saturation: 100, lightness: 100, transparency: 0 };
-                                    return { ...prev, control: key, defaults: { ...defaults } };
+                                    // Просто переключаем контроль, значения берутся из shape
+                                    return { ...prev, control: key };
                                   });
                                 }}
                                 className={`absolute w-10 h-10 rounded-full border bg-[#242826] text-sm font-semibold pointer-events-auto ${isActive ? activeClass : 'border-white/10 text-cyan-400'}`}
@@ -1907,13 +1903,8 @@
                 const cfg = getQuickControlConfig(imageQuickMenu.control, quickImageTarget);
                 if (!cfg) return null;
 
-                // Используем значение из defaults для отображения в лейбле
-                const defaults = imageQuickMenu.defaults || { hue: 0, saturation: 100, lightness: 100, transparency: 0 };
-                let displayValue;
-                if (imageQuickMenu.control === 'hue') displayValue = defaults.hue ?? cfg.value;
-                else if (imageQuickMenu.control === 'saturation') displayValue = defaults.saturation ?? cfg.value;
-                else if (imageQuickMenu.control === 'lightness') displayValue = defaults.lightness ?? cfg.value;
-                else displayValue = cfg.value;
+                // Используем значение из shape как единственный источник истины
+                const displayValue = cfg.value;
 
                 let labelColor = 'text-cyan-300';
                 if (imageQuickMenu.control === 'hue') labelColor = 'text-pink-400';
@@ -1930,9 +1921,8 @@
               {imageQuickMenu.control === 'transparency' && (() => {
                 const cfg = getQuickControlConfig('transparency', quickImageTarget);
                 if (!cfg) return null;
-                // Используем значение из defaults для отображения в лейбле
-                const defaults = imageQuickMenu.defaults || { hue: 0, saturation: 100, lightness: 100, transparency: 0 };
-                const displayValue = defaults.transparency ?? cfg.value;
+                // Используем значение из shape как единственный источник истины
+                const displayValue = cfg.value;
                 return (
                   <div className="fixed left-1/2 -translate-x-1/2 bottom-6 z-[120] text-cyan-300 text-sm font-mono bg-[#1d1f25]/90 border border-white/10 px-3 py-1.5 rounded-lg">
                     Transparency: {Math.round(displayValue)}%
