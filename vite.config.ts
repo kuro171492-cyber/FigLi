@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   root: '.',
-  base: '/FigLi/',
+  base: '/kuro171492-cyber/FigLi/',
   build: {
     outDir: 'dist',
   },
