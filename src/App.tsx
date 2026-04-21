@@ -786,8 +786,8 @@ function appReducer(state, action) {
 function App() {
     const [state, dispatch] = useReducer(appReducer, initialAppState);
     const [activeHandle, setActiveHandle] = useState(null);
-    const [layerColorPickerShapeId, setLayerColorPickerShapeId] = useState(null);
-    const [imageQuickMenu, setImageQuickMenu] = useState(null);
+    const [layerColorPickerShapeId, setLayerColorPickerShapeId] = useState<string | null>(null);
+    const [imageQuickMenu, setImageQuickMenu] = useState<{ shapeId: string; x: number; y: number; control: string; initialAngle?: number } | null>(null);
     const [interaction, setInteraction] = useState({ isDragging: false, startAngle: null, initialValue: null });
     const {
       stage,
