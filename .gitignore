@@ -1,28 +1,13 @@
-# Build outputs
-dist/
-build/
-*.js.map
-*.ts.map
-*.css.map
-
+```gitignore
 # Dependencies
 node_modules/
 
-# Environment variables
-.env
-.env.local
-*.env.*
+# Build outputs
+dist/
+build/
+target/
 
-# IDE specific
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Logs
-*.log
-
-# Python (if applicable)
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -31,37 +16,38 @@ __pycache__/
 env/
 venv/
 .venv/
-pip-log.txt
-pip-selfcheck.json
-.pytest_cache/
-.coverage
+.ENV
+.python-version
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
 htmlcov/
+.coverage
+
+# MyPy
 .mypy_cache/
 
-# Distribution / packaging
-.Python
-env/
-venv/
-.venv/
-.ENV
-.venv.bak/
-env.bak/
-
-# Testing
-coverage/
-.nyc_output/
-coverage-final.json
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-Thumbs.db:encryptable
-*~
+# Pytest
+.pytest_cache/
 
 # Temporary files
 *.tmp
@@ -69,324 +55,15 @@ Thumbs.db:encryptable
 *.bak
 *.backup
 
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Debug
-debug.log
-*.log
-
-# Local configuration files
-*.local
-
-# Coverage directory used by tools like istanbul
-coverage/
-
-# nyc test coverage
-.nyc_output
-
-# Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
-.grunt
-
-# Bower dependency directory (https://bower.io/)
-bower_components
-
-# node-waf configuration
-.lock-wscript
-
-# Compiled binary addons (https://nodejs.org/api/addons.html)
-build/Release
-
-# Dependency directories
-node_modules/
-jspm_packages/
-
-# TypeScript v1 declaration files
-typings/
-
-# Optional npm cache directory
-.npm
-
-# Optional eslint cache
-.eslintcache
-
-# Optional REPL history
-.node_repl_history
-
-# Output of 'npm pack'
-*.tgz
-
-# Yarn Integrity file
-.yarn-integrity
-
-# dotenv environment variables file
-.env.test
-
-# next.js build output
-.next/
-
-# nuxt.js build output
-.nuxt/
-
-# vuepress build output
-.vuepress/dist
-
-# Serverless directories
-.serverless/
-
-# FuseBox cache
-.fusebox/
-
-# DynamoDB Local files
-.dynamodb/
-
-# TernJS port file for the editor
-.tern-port
-
-# Stores VSCode versions used for testing VSCode extensions
-.vscode-test
-
-# yarn v2
-.yarn/cache
-.yarn/unplugged
-.yarn/build-state.yml
-.yarn/install-state.gz
-.pnp.*
-.yarn/sdks
-
-# zig
-zig-cache/
-zig-out/
-
-# julia
-julia-*/
-
-# gradle
-.gradle/
-!gradle.properties
-
-# maven
-target/
-
-# go
-*.a
-*.o
-*.so
-*.out
-go.mod
-go.sum
-vendor/
-
-# rust
-Cargo.lock
-target/
-
-# ruby
-Gemfile.lock
-.bundle/
-.ruby-version
-.ruby-gemset
-
-# php
-composer.lock
-vendor/
-
-# java
-*.class
-*.jar
-*.war
-*.ear
-hs_err_pid*
-
-# c/c++
-*.i
-*.ii
-*.s
-*.su
-*.lo
-*.la
-*.dylib
-*.dll
-*.so.*
-
-# python virtual env in project
-.venv/
-venv/
-env/
-
-# jupyter
-.ipynb_checkpoints
-
-# sublime
-*.sublime-workspace
-*.sublime-project
-
-# vim
-*.un~
-Session.vim
-.netrwhist
-
-# emacs
-*~
-\#*\#
-/.emacs.desktop
-/.emacs.desktop.lock
-*.elc
-auto-save-list
-tramp
-.\#*
-
-# backup files
-*~
-.*~
-*#
-.#*
-
-# temporary files
-tmp/
-temp/
-
-# logs
-logs/
-*.log
-
-# pid files
-*.pid
-
-# cache
-.cache/
-*.cache
-
-# test coverage
-coverage.xml
-lcov.info
-
-# secrets
-secrets/
-.secret
-
-# database
-*.db
-*.db-journal
-
-# docker
-.dockerenv
-.dockerinit
-
-# kubernetes
-.kubeconfig
-
-# terraform
-.terraform/
-*.tfstate
-*.tfvars
-*.tfplan
-
-# ansible
-.retry
-
-# chef
-.kitchen.yml
-.kitchen/
-
-# puppet
-spec/fixtures/modules/
-pkg/
-
-# saltstack
-salt://
-
-# meson
-meson-private/
-meson.build
-
-# cmake
-CMakeFiles/
-CMakeCache.txt
-cmake_install_manifest.txt
-Makefile
-ninja_*.log
-compile_commands.json
-
-# autotools
-autom4te.cache/
-config.h.in
-configure.ac
-aclocal.m4
-config.h
-config.log
-config.status
-.libs/
-.deps/
-
-# scons
-.config.log
-.sconf_temp/
-.sconsign.dblite
-
-# mesos
-mesos_console.log
-
-# android
-*.ap_
-bin/
-gen/
-out/
-
-# ios
-*.xcodeproj/
-*.xcworkspace/
-*.app
-*.ipa
-*.dSYM
-*.lproj/
-
-# unity
-Library/
-Temp/
-Obj/
-Build/
-Logs/
-.vs/
-
-# unreal engine
-Intermediate/
-Saved/
-Binaries/
-*.uproject
-
-# cocos2d-x
-cocos2d/
-
-# build artifacts
-*.o
-*.obj
-*.exe
-*.dll
-*.so
-*.a
-*.lib
-*.dylib
-*.plist
-
-# compressed archives
+# Compressed files
 *.zip
-*.tar.gz
-*.tar.bz2
-*.tar.xz
 *.gz
+*.tar
+*.tgz
 *.bz2
 *.xz
 *.7z
 *.rar
-*.tar
-*.tgz
-*.Z
-*.lz
-*.lzo
 *.zst
 *.lz4
 *.lzh
@@ -394,55 +71,11 @@ cocos2d/
 *.arj
 *.rpm
 *.deb
-
-# images (if generated)
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.bmp
-*.webp
-*.tiff
-*.svg
-
-# video
-*.mp4
-*.avi
-*.mov
-*.wmv
-*.flv
-*.webm
-
-# audio
-*.mp3
-*.wav
-*.flac
-*.aac
-*.ogg
-*.wma
-
-# fonts
-*.ttf
-*.woff
-*.woff2
-*.eot
-
-# documents
-*.pdf
-*.doc
-*.docx
-*.xls
-*.xlsx
-*.ppt
-*.pptx
-
-# other
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-Thumbs.db:encryptable
-*~
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```

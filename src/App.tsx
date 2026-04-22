@@ -1,48 +1,9 @@
 import React, { useReducer, useRef, useEffect, useMemo, useCallback, useState } from 'react';
-
-const Icon = ({ name, size = 16, className = "", style = {}, ...rest }) => (
-    <span
-      className={`material-symbols-outlined ${className}`.trim()}
-      style={{
-        fontSize: size,
-        lineHeight: 1,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        verticalAlign: "middle",
-        userSelect: "none",
-        ...style
-      }}
-      {...rest}
-    >
-      {name}
-    </span>
-  );
-
-const Hand = (props) => <Icon name="pan_tool_alt" {...props} />;
-const MousePointer2 = (props) => <Icon name="arrow_selector_tool" {...props} />;
-const Square = (props) => <Icon name="crop_square" {...props} />;
-const Circle = (props) => <Icon name="circle" {...props} />;
-const Triangle = (props) => <Icon name="change_history" {...props} />;
-const Minus = (props) => <Icon name="remove" {...props} />;
-const Trash2 = (props) => <Icon name="delete" {...props} />;
-const FileImage = (props) => <Icon name="imagesmode" {...props} />;
-const Settings2 = (props) => <Icon name="tune" {...props} />;
-const X = (props) => <Icon name="close" {...props} />;
-const Lock = (props) => <Icon name="lock" {...props} />;
-const Unlock = (props) => <Icon name="lock_open" {...props} />;
-const RotateCw = (props) => <Icon name="refresh" {...props} />;
-const Droplets = (props) => <Icon name="water_drop" {...props} />;
-const Type = (props) => <Icon name="opacity" {...props} />;
-const Layers = (props) => <Icon name="layers" {...props} />;
-const Eye = (props) => <Icon name="visibility" {...props} />;
-const EyeOff = (props) => <Icon name="visibility_off" {...props} />;
-const PenTool = (props) => <Icon name="draw" {...props} />;
-const Pentagon = (props) => <Icon name="pentagon" {...props} />;
-const Check = (props) => <Icon name="check" {...props} />;
-const Hash = (props) => <Icon name="tag" {...props} />;
-const Sun = (props) => <Icon name="light_mode" {...props} />;
-const Palette = (props) => <Icon name="palette" {...props} />;
+import { 
+  Icon, Hand, MousePointer2, Square, Circle, Triangle, Minus, Trash2, 
+  FileImage, Settings2, X, Lock, Unlock, RotateCw, Droplets, Type, 
+  Layers, Eye, EyeOff, PenTool, Pentagon, Check, Hash, Sun, Palette 
+} from './Icon';
 
 interface ImageQuickMenu {
   shapeId: string;
