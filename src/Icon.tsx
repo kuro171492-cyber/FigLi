@@ -58,3 +58,6 @@ export const Check = (props: Omit<IconProps, 'name'>) => <Icon name="check" {...
 export const Hash = (props: Omit<IconProps, 'name'>) => <Icon name="tag" {...props} />;
 export const Sun = (props: Omit<IconProps, 'name'>) => <Icon name="light_mode" {...props} />;
 export const Palette = (props: Omit<IconProps, 'name'>) => <Icon name="palette" {...props} />;
+export const Maximize = (props: Omit<IconProps, 'name'>) => <Icon name="fullscreen" {...props} />;
+export const Minimize = (props: Omit<IconProps, 'name'>) => <Icon name="fullscreen_exit" {...props} />;
+export const Contrast = (props: Omit<IconProps, 'name'>) => <Icon name="contrast" {...props} />;

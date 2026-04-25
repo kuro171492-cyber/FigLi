@@ -1,17 +1,23 @@
-import React, { useReducer, useRef, useEffect, useMemo, useCallback, useState } from 'react';
+﻿import React, { useReducer, useRef, useEffect, useMemo, useCallback, useState } from 'react';
 import { 
   Icon, Hand, MousePointer2, Square, Circle, Triangle, Minus, Trash2, 
   FileImage, Settings2, X, Lock, Unlock, RotateCw, Droplets, Type, 
-  Layers, Eye, EyeOff, PenTool, Pentagon, Check, Hash, Sun, Palette 
+  Layers, Eye, EyeOff, PenTool, Pentagon, Check, Hash, Sun, Palette,
+  Maximize, Minimize, Contrast
 } from './Icon';
 
 interface ImageQuickMenu {
   shapeId: string;
-  x: number;
-  y: number;
   control: string;
-  initialAngle?: number;
+  isPrecision?: boolean;
+  blinkOpacity?: number | null;
+  savedValues?: Record<string, number>;
 }
+
+const PRECISE_HANDLE_SPREAD = Math.PI / 6;
+const DEFAULT_PRECISE_MOVE_LEVER = 92;
+const DEFAULT_PRECISE_ROTATE_LEVER = DEFAULT_PRECISE_MOVE_LEVER;
+const DEFAULT_PRECISE_SCALE_LEVER = DEFAULT_PRECISE_MOVE_LEVER;
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
@@ -29,6 +35,17 @@ const COLOR_PRESETS = [
     '#ca8a04', '#16a34a', '#0d9488', '#0891b2',
     '#475569', '#f8fafc'
   ];
+const COLOR_GROUPS = [
+  ['#2563eb', '#3b82f6', '#1d4ed8'],
+  ['#db2777', '#ec4899', '#be185d'],
+  ['#16a34a', '#22c55e', '#15803d']
+];
+
+const nextShadeInGroup = (current, group) => {
+  const idx = group.findIndex((c) => c.toLowerCase() === String(current || '').toLowerCase());
+  if (idx === -1) return group[0];
+  return group[(idx + 1) % group.length];
+};
 
 const renderLineWithDivisions = (shape, shapeStyle) => {
     const x1 = shape.x - shapeStyle.left;
@@ -90,249 +107,286 @@ interface ShapeItemProps {
   onToggleLock: (id: any) => void;
   stageScale?: number;
   activeHandle: any;
-  onImageLongPress?: ((shapeId: any, point: any) => void) | null;
+  onShapeDoubleTap?: ((shapeId: any) => void) | null;
+  isPrecisionMode?: boolean;
+  onImagePrecisionTap?: ((shapeId: any, point: any) => void) | null;
 }
 
-const ShapeItem = React.memo(function ShapeItem({ shape, isSelected, onShapeInteraction, onToggleLock, stageScale = 1, activeHandle = null, onImageLongPress = null }: ShapeItemProps) {
-    const isLine = shape.type === 'line';
-    const isPoly = shape.type === 'poly';
-    const isImage = shape.type === 'image';
-    const canRotate = shape.type !== 'line' && shape.type !== 'poly';
-    const safeScale = Math.max(stageScale, 0.01);
-    const inverseScale = 1 / safeScale;
-    const showCrosshairHandles = safeScale > 2;
-    const isHandleActive = useCallback((mode, extra = null) => (
-      isSelected
-      && activeHandle
-      && activeHandle.id === shape.id
-      && activeHandle.mode === mode
-      && activeHandle.extra === extra
-    ), [isSelected, activeHandle, shape.id]);
+const ShapeItem = React.memo(function ShapeItem({
+  shape,
+  isSelected,
+  onShapeInteraction,
+  onToggleLock,
+  stageScale = 1,
+  activeHandle = null,
+  onShapeDoubleTap = null,
+  isPrecisionMode = false,
+  onImagePrecisionTap = null
+}: ShapeItemProps) {
+  const isLine = shape.type === 'line';
+  const isPoly = shape.type === 'poly';
+  const isImage = shape.type === 'image';
+  const canRotate = shape.type !== 'line' && shape.type !== 'poly';
+  const safeScale = Math.max(stageScale, 0.01);
+  const inverseScale = 1 / safeScale;
+  const showCrosshairHandles = safeScale > 2;
+  const showRemoteHandle = showCrosshairHandles || isPrecisionMode;
+  const tapRef = useRef({ ts: 0, shapeId: '' });
+  const touchTapRef = useRef({ valid: false, x: 0, y: 0 });
 
-    const renderHandleGlyph = useCallback((isActive) => {
-      if (showCrosshairHandles) {
-        return (
-          <div className="relative w-4 h-4">
-            <div className={`absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 ${isActive ? 'bg-yellow-300' : 'bg-white'} shadow-[0_0_0_1px_rgba(59,130,246,0.9)]`} />
-            <div className={`absolute top-1/2 left-0 right-0 h-px -translate-y-1/2 ${isActive ? 'bg-yellow-300' : 'bg-white'} shadow-[0_0_0_1px_rgba(59,130,246,0.9)]`} />
-          </div>
-        );
-      }
+  const isHandleActive = useCallback((mode, extra = null) => (
+    isSelected
+    && activeHandle
+    && activeHandle.id === shape.id
+    && activeHandle.mode === mode
+    && activeHandle.extra === extra
+  ), [isSelected, activeHandle, shape.id]);
+
+  const renderHandleGlyph = useCallback((isActive) => {
+    if (showCrosshairHandles) {
       return (
-        <div className={`w-4 h-4 border-2 rounded-full shadow-lg ${isActive ? 'bg-yellow-300 border-yellow-500 ring-2 ring-yellow-400/70' : 'bg-white border-blue-500'}`} />
+        <div className="relative w-4 h-4">
+          <div className={`absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 ${isActive ? 'bg-yellow-300' : 'bg-white'} shadow-[0_0_0_1px_rgba(59,130,246,0.9)]`} />
+          <div className={`absolute top-1/2 left-0 right-0 h-px -translate-y-1/2 ${isActive ? 'bg-yellow-300' : 'bg-white'} shadow-[0_0_0_1px_rgba(59,130,246,0.9)]`} />
+        </div>
       );
-    }, [showCrosshairHandles]);
-
-    const longPressTimerRef = useRef(null);
-    const touchStartRef = useRef(null);
-
-    const clearLongPress = useCallback(() => {
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = null;
-      }
-      touchStartRef.current = null;
-    }, []);
-
-    const startImageLongPress = useCallback((clientX, clientY) => {
-      if (!isImage || !onImageLongPress) return;
-      clearLongPress();
-      touchStartRef.current = { x: clientX, y: clientY };
-      longPressTimerRef.current = setTimeout(() => {
-        onImageLongPress(shape.id, { x: clientX, y: clientY });
-        clearLongPress();
-      }, 2000);
-    }, [isImage, onImageLongPress, shape.id, clearLongPress]);
-
-    const moveImageLongPress = useCallback((clientX, clientY) => {
-      if (!touchStartRef.current) return;
-      const dist = Math.hypot(clientX - touchStartRef.current.x, clientY - touchStartRef.current.y);
-      // Увеличиваем порог срабатывания до 20px чтобы избежать случайных сбросов
-      if (dist > 20) clearLongPress();
-    }, [clearLongPress]);
-
-    useEffect(() => () => clearLongPress(), [clearLongPress]);
-
-    const shapeStyle = useMemo(() => (
-      isLine
-        ? {
-          left: Math.min(shape.x, shape.x2),
-          top: Math.min(shape.y, shape.y2),
-          width: Math.max(Math.abs(shape.x2 - shape.x), 1),
-          height: Math.max(Math.abs(shape.y2 - shape.y), 1)
-        }
-        : {
-          left: shape.x,
-          top: shape.y,
-          width: shape.w,
-          height: shape.h
-        }
-    ), [isLine, shape.x, shape.y, shape.x2, shape.y2, shape.w, shape.h]);
-
-    const imageFilter = useMemo(
-      () => `hue-rotate(${shape.hue || 0}deg) saturate(${shape.saturation ?? 100}%) brightness(${shape.brightness ?? 100}%) invert(${shape.invert ? 100 : 0}%)`,
-      [shape.hue, shape.saturation, shape.brightness, shape.invert]
-    );
-
+    }
     return (
-      <div
-        className={`absolute ${isImage ? 'z-0' : (isSelected ? 'z-20' : 'z-10')} touch-none`}
-        onMouseDown={(e) => onShapeInteraction(e, shape.id, shape.isLocked ? 'select-only' : 'move')}
-        onTouchStart={(e) => onShapeInteraction(e, shape.id, shape.isLocked ? 'select-only' : 'move')}
-        style={{
-          ...shapeStyle,
-          opacity: shape.opacity / 100,
-          transform: isLine ? 'none' : `rotate(${shape.rotation}deg)`,
-          transformOrigin: 'center center',
-          outline: isSelected ? `2px solid ${shape.isLocked ? '#fb923c' : '#3b82f6'}` : 'none',
-          outlineOffset: '2px',
-          pointerEvents: 'auto',
-          cursor: shape.isLocked ? 'default' : 'move'
-        }}
-      >
-        {isImage ? (
-          <img
-            src={shape.src}
-            onContextMenu={(e) => e.preventDefault()}
-            onDragStart={(e) => e.preventDefault()}
-            onTouchStart={(e) => {
-              if (e.cancelable) e.preventDefault();
-              if (!e.touches || !e.touches[0]) return;
-              startImageLongPress(e.touches[0].clientX, e.touches[0].clientY);
-            }}
-            onTouchMove={(e) => {
-              if (e.cancelable) e.preventDefault();
-              if (!e.touches || !e.touches[0]) return;
-              moveImageLongPress(e.touches[0].clientX, e.touches[0].clientY);
-            }}
-            onTouchEnd={(e) => {
-              if (e.cancelable) e.preventDefault();
-              clearLongPress();
-            }}
-            onTouchCancel={(e) => {
-              if (e.cancelable) e.preventDefault();
-              clearLongPress();
-            }}
-            onMouseDown={(e) => startImageLongPress(e.clientX, e.clientY)}
-            onMouseMove={(e) => moveImageLongPress(e.clientX, e.clientY)}
-            onMouseUp={clearLongPress}
-            onMouseLeave={clearLongPress}
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'fill',
-              display: 'block',
-              filter: imageFilter,
-              WebkitTouchCallout: 'none',
-              WebkitUserSelect: 'none',
-              userSelect: 'none'
-            }}
-            draggable={false}
-            alt="Layer"
-          />
-        ) : (
-          <svg width="100%" height="100%" viewBox={`0 0 ${shapeStyle.width} ${shapeStyle.height}`} preserveAspectRatio="none" className="overflow-visible block">
-            {shape.type === 'rect' && <rect width="100%" height="100%" fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />}
-            {shape.type === 'circle' && <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />}
-            {shape.type === 'triangle' && <polygon points={`${shape.w / 2},0 ${shape.w},${shape.h} 0,${shape.h}`} fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />}
-            {isLine && renderLineWithDivisions(shape, shapeStyle)}
-            {isPoly && (
-              <polygon
-                points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                fill={shape.isClosed ? shape.fill : 'transparent'}
-                stroke={shape.stroke}
-                strokeWidth={shape.strokeWidth}
-              />
-            )}
-          </svg>
-        )}
-
-        {isSelected && !shape.isLocked && (
-          <>
-            <button
-              className="absolute -top-10 -right-2 p-2 rounded-full shadow-lg border-2 border-[#0a0a0a] transition-all active:scale-95 bg-[#222] text-gray-400 hover:text-white pointer-events-auto"
-              style={{ transform: `scale(${inverseScale})`, transformOrigin: 'top right' }}
-              onClick={(e) => { e.stopPropagation(); onToggleLock(shape.id); }}
-            >
-              <Unlock size={14} />
-            </button>
-            {canRotate && (
-              <div className="absolute -top-10 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-auto" onMouseDown={(e) => onShapeInteraction(e, shape.id, 'rotate')} onTouchStart={(e) => onShapeInteraction(e, shape.id, 'rotate')}>
-                <div className="w-0.5 h-4 bg-blue-500" />
-                <div className="w-6 h-6 bg-white border-2 border-blue-500 rounded-full flex items-center justify-center text-blue-500 shadow-lg cursor-alias"><RotateCw size={10} /></div>
-              </div>
-            )}
-
-            {isPoly && shape.points.map((p, idx) => (
-              <div
-                key={idx}
-                className="absolute w-8 h-8 flex items-center justify-center cursor-crosshair z-30 pointer-events-auto"
-                style={{ left: p.x, top: p.y, transform: `translate(-50%, -50%) scale(${inverseScale})` }}
-                onMouseDown={(e) => onShapeInteraction(e, shape.id, 'poly-point', idx)}
-                onTouchStart={(e) => onShapeInteraction(e, shape.id, 'poly-point', idx)}
-              >
-                {renderHandleGlyph(isHandleActive('poly-point', idx))}
-              </div>
-            ))}
-
-            {isLine && (
-              <>
-                <div
-                  className="absolute w-8 h-8 flex items-center justify-center pointer-events-auto"
-                  style={{
-                    left: shape.x <= shape.x2 ? 0 : shapeStyle.width,
-                    top: shape.y <= shape.y2 ? 0 : shapeStyle.height,
-                    transform: `translate(-50%, -50%) scale(${inverseScale})`
-                  }}
-                  onMouseDown={(e) => onShapeInteraction(e, shape.id, 'line-point', 'start')}
-                  onTouchStart={(e) => onShapeInteraction(e, shape.id, 'line-point', 'start')}
-                >
-                  {renderHandleGlyph(isHandleActive('line-point', 'start'))}
-                </div>
-                <div
-                  className="absolute w-8 h-8 flex items-center justify-center pointer-events-auto"
-                  style={{
-                    left: shape.x > shape.x2 ? 0 : shapeStyle.width,
-                    top: shape.y > shape.y2 ? 0 : shapeStyle.height,
-                    transform: `translate(-50%, -50%) scale(${inverseScale})`
-                  }}
-                  onMouseDown={(e) => onShapeInteraction(e, shape.id, 'line-point', 'end')}
-                  onTouchStart={(e) => onShapeInteraction(e, shape.id, 'line-point', 'end')}
-                >
-                  {renderHandleGlyph(isHandleActive('line-point', 'end'))}
-                </div>
-              </>
-            )}
-
-            {!isLine && !isPoly && (
-              <div
-                className="absolute w-8 h-8 flex items-center justify-center cursor-se-resize pointer-events-auto"
-                style={{
-                  left: shapeStyle.width,
-                  top: shapeStyle.height,
-                  transform: `translate(-50%, -50%) scale(${inverseScale})`
-                }}
-                onMouseDown={(e) => onShapeInteraction(e, shape.id, 'resize')}
-                onTouchStart={(e) => onShapeInteraction(e, shape.id, 'resize')}
-              >
-                {renderHandleGlyph(isHandleActive('resize'))}
-              </div>
-            )}
-          </>
-        )}
-
-        {isSelected && shape.isLocked && (
-          <button
-            className="absolute -top-10 -right-2 p-2 rounded-full shadow-lg border-2 border-[#0a0a0a] transition-all active:scale-95 bg-orange-500 text-white pointer-events-auto"
-            style={{ transform: `scale(${inverseScale})`, transformOrigin: 'top right' }}
-            onClick={(e) => { e.stopPropagation(); onToggleLock(shape.id); }}
-          >
-            <Lock size={14} />
-          </button>
-        )}
-      </div>
+      <div className={`w-4 h-4 border-2 rounded-full shadow-lg ${isActive ? 'bg-yellow-300 border-yellow-500 ring-2 ring-yellow-400/70' : 'bg-white border-blue-500'}`} />
     );
-  });
+  }, [showCrosshairHandles]);
+
+  const handleTouchStartForTap = useCallback((e) => {
+    if (!e.touches || e.touches.length !== 1) {
+      touchTapRef.current.valid = false;
+      return;
+    }
+    touchTapRef.current = {
+      valid: true,
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY
+    };
+  }, []);
+
+  const handleTouchMoveForTap = useCallback((e) => {
+    if (!touchTapRef.current.valid) return;
+    if (!e.touches || e.touches.length !== 1) {
+      touchTapRef.current.valid = false;
+      return;
+    }
+    const dx = e.touches[0].clientX - touchTapRef.current.x;
+    const dy = e.touches[0].clientY - touchTapRef.current.y;
+    if (Math.hypot(dx, dy) > 12) touchTapRef.current.valid = false;
+  }, []);
+
+  const handleTouchTap = useCallback((e) => {
+    if (!touchTapRef.current.valid) return;
+    touchTapRef.current.valid = false;
+    if (e.touches && e.touches.length > 0) return;
+    if (!onShapeDoubleTap) return;
+    if (!e.changedTouches || !e.changedTouches[0]) return;
+    const now = Date.now();
+    const isDouble = tapRef.current.shapeId === shape.id && (now - tapRef.current.ts) < 320;
+    if (isDouble) {
+      onShapeDoubleTap(shape.id);
+      tapRef.current = { ts: 0, shapeId: '' };
+      return;
+    }
+    tapRef.current = { ts: now, shapeId: shape.id };
+  }, [onShapeDoubleTap, shape.id]);
+
+  const lineHitPad = 16 * inverseScale;
+  const shapeStyle = useMemo(() => (
+    isLine
+      ? {
+        left: Math.min(shape.x, shape.x2) - lineHitPad,
+        top: Math.min(shape.y, shape.y2) - lineHitPad,
+        width: Math.max(Math.abs(shape.x2 - shape.x), 1) + lineHitPad * 2,
+        height: Math.max(Math.abs(shape.y2 - shape.y), 1) + lineHitPad * 2
+      }
+      : {
+        left: shape.x,
+        top: shape.y,
+        width: shape.w,
+        height: shape.h
+      }
+  ), [isLine, shape.x, shape.y, shape.x2, shape.y2, shape.w, shape.h, lineHitPad]);
+
+  const imageFilter = useMemo(
+    () => `hue-rotate(${shape.hue || 0}deg) saturate(${shape.saturation ?? 100}%) brightness(${shape.brightness ?? 100}%) contrast(${shape.contrast ?? 100}%) invert(${shape.invert ? 100 : 0}%)`,
+    [shape.hue, shape.saturation, shape.brightness, shape.contrast, shape.invert]
+  );
+
+  const transformOrigin = isImage
+    ? `${(shape.pivotU ?? 0.5) * 100}% ${(shape.pivotV ?? 0.5) * 100}%`
+    : 'center center';
+
+  return (
+    <div
+      className="absolute z-10 touch-none"
+      onMouseDown={(e) => onShapeInteraction(e, shape.id, shape.isLocked ? 'locked-noop' : 'move')}
+      onTouchStart={(e) => onShapeInteraction(e, shape.id, shape.isLocked ? 'locked-noop' : 'move')}
+      onDoubleClick={(e) => { e.stopPropagation(); onShapeDoubleTap?.(shape.id); }}
+      onTouchStartCapture={handleTouchStartForTap}
+      onTouchMoveCapture={handleTouchMoveForTap}
+      onTouchEnd={handleTouchTap}
+      style={{
+        ...shapeStyle,
+        opacity: shape.opacity / 100,
+        transform: isLine ? 'none' : `rotate(${shape.rotation}deg)`,
+        transformOrigin,
+        boxShadow: 'none',
+        pointerEvents: shape.isLocked ? 'none' : 'auto',
+        cursor: shape.isLocked ? 'default' : 'move'
+      }}
+    >
+      {isImage ? (
+        <img
+          src={shape.src}
+          onContextMenu={(e) => e.preventDefault()}
+          onDragStart={(e) => e.preventDefault()}
+          onDoubleClick={(e) => { e.stopPropagation(); onShapeDoubleTap?.(shape.id); }}
+          onClick={(e) => {
+            if (!isPrecisionMode || !onImagePrecisionTap) return;
+            e.stopPropagation();
+            const rect = e.currentTarget.getBoundingClientRect();
+            onImagePrecisionTap(shape.id, {
+              x: e.clientX - rect.left,
+              y: e.clientY - rect.top,
+              w: rect.width,
+              h: rect.height
+            });
+          }}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'fill',
+            display: 'block',
+            filter: imageFilter,
+            WebkitTouchCallout: 'none',
+            WebkitUserSelect: 'none',
+            userSelect: 'none'
+          }}
+          draggable={false}
+          alt="Layer"
+        />
+      ) : (
+        <svg width="100%" height="100%" viewBox={`0 0 ${shapeStyle.width} ${shapeStyle.height}`} preserveAspectRatio="none" className="overflow-visible block">
+          {shape.type === 'rect' && <rect width="100%" height="100%" fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />}
+          {shape.type === 'circle' && <ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />}
+          {shape.type === 'triangle' && <polygon points={`${shape.w / 2},0 ${shape.w},${shape.h} 0,${shape.h}`} fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} />}
+          {isLine && renderLineWithDivisions(shape, shapeStyle)}
+          {isPoly && (
+            <polygon
+              points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
+              fill={shape.isClosed ? shape.fill : 'transparent'}
+              stroke={shape.stroke}
+              strokeWidth={shape.strokeWidth}
+            />
+          )}
+        </svg>
+      )}
+
+      {isSelected && !shape.isLocked && (
+        <>
+          {canRotate && !isPrecisionMode && (
+            <div
+              className="absolute left-1/2 flex flex-col items-center pointer-events-auto"
+              style={{ top: 0, transform: `translate(-50%, -100%) scale(${inverseScale})`, transformOrigin: 'bottom center', paddingBottom: '4px' }}
+              onMouseDown={(e) => onShapeInteraction(e, shape.id, 'rotate')}
+              onTouchStart={(e) => onShapeInteraction(e, shape.id, 'rotate')}
+            >
+              <div className="w-6 h-6 bg-white border-2 border-blue-500 rounded-full flex items-center justify-center text-blue-500 shadow-lg cursor-alias"><RotateCw size={10} /></div>
+              <div className="w-0.5 h-4 bg-blue-500" />
+            </div>
+          )}
+
+          {isPoly && shape.points.map((p, idx) => (
+            <div key={idx} className="absolute z-30 pointer-events-auto" style={{ left: p.x, top: p.y }}>
+              {showRemoteHandle ? (
+                <div style={{ transform: `scale(${inverseScale})`, transformOrigin: 'top left' }} className="absolute left-0 top-0 pointer-events-none">
+                  <div className="absolute left-0 top-0 w-2 h-2 bg-blue-500 rounded-full -translate-x-1/2 -translate-y-1/2" />
+                  <svg className="absolute overflow-visible pointer-events-none" style={{ left: 0, top: 0, width: 40, height: 40 }}>
+                    <path d="M 0 0 L 40 40" stroke="#3b82f6" strokeWidth="1.5" strokeDasharray="3 3" />
+                  </svg>
+                  <div
+                    className="absolute w-12 h-12 flex items-center justify-center pointer-events-auto cursor-crosshair"
+                    style={{ left: 40, top: 40, transform: 'translate(-50%, -50%)' }}
+                    onMouseDown={(e) => onShapeInteraction(e, shape.id, 'poly-point', idx)}
+                    onTouchStart={(e) => onShapeInteraction(e, shape.id, 'poly-point', idx)}
+                  >
+                    <div className={`w-8 h-8 rounded-full border-2 bg-[#222] flex items-center justify-center shadow-xl transition-colors ${isHandleActive('poly-point', idx) ? 'border-yellow-400 text-yellow-400' : 'border-blue-500 text-blue-500'}`}>
+                      <MousePointer2 size={16} />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="absolute w-8 h-8 flex items-center justify-center cursor-crosshair z-30 pointer-events-auto"
+                  style={{ left: 0, top: 0, transform: `translate(-50%, -50%) scale(${inverseScale})` }}
+                  onMouseDown={(e) => onShapeInteraction(e, shape.id, 'poly-point', idx)}
+                  onTouchStart={(e) => onShapeInteraction(e, shape.id, 'poly-point', idx)}
+                >
+                  {renderHandleGlyph(isHandleActive('poly-point', idx))}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {isLine && (
+            <>
+                {[
+                { id: 'start', left: shape.x <= shape.x2 ? lineHitPad : shapeStyle.width - lineHitPad, top: shape.y <= shape.y2 ? lineHitPad : shapeStyle.height - lineHitPad },
+                { id: 'end', left: shape.x > shape.x2 ? lineHitPad : shapeStyle.width - lineHitPad, top: shape.y > shape.y2 ? lineHitPad : shapeStyle.height - lineHitPad }
+              ].map((pt) => (
+                <div key={pt.id} className="absolute z-30 pointer-events-auto" style={{ left: pt.left, top: pt.top }}>
+                  {showRemoteHandle ? (
+                    <div style={{ transform: `scale(${inverseScale})`, transformOrigin: 'top left' }} className="absolute left-0 top-0 pointer-events-none">
+                      <div className="absolute left-0 top-0 w-2 h-2 bg-blue-500 rounded-full -translate-x-1/2 -translate-y-1/2" />
+                      <svg className="absolute overflow-visible pointer-events-none" style={{ left: 0, top: 0, width: 40, height: 40 }}>
+                        <path d="M 0 0 L 40 40" stroke="#3b82f6" strokeWidth="1.5" strokeDasharray="3 3" />
+                      </svg>
+                      <div
+                        className="absolute w-12 h-12 flex items-center justify-center pointer-events-auto cursor-crosshair"
+                        style={{ left: 40, top: 40, transform: 'translate(-50%, -50%)' }}
+                        onMouseDown={(e) => onShapeInteraction(e, shape.id, 'line-point', pt.id)}
+                        onTouchStart={(e) => onShapeInteraction(e, shape.id, 'line-point', pt.id)}
+                      >
+                        <div className={`w-8 h-8 rounded-full border-2 bg-[#222] flex items-center justify-center shadow-xl transition-colors ${isHandleActive('line-point', pt.id) ? 'border-yellow-400 text-yellow-400' : 'border-blue-500 text-blue-500'}`}>
+                          <MousePointer2 size={16} />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className="absolute w-8 h-8 flex items-center justify-center pointer-events-auto"
+                      style={{ left: 0, top: 0, transform: `translate(-50%, -50%) scale(${inverseScale})` }}
+                      onMouseDown={(e) => onShapeInteraction(e, shape.id, 'line-point', pt.id)}
+                      onTouchStart={(e) => onShapeInteraction(e, shape.id, 'line-point', pt.id)}
+                    >
+                      {renderHandleGlyph(isHandleActive('line-point', pt.id))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
+
+          {!isLine && !isPoly && !isPrecisionMode && (
+            <div
+              className="absolute w-8 h-8 flex items-center justify-center cursor-se-resize pointer-events-auto"
+              style={{ left: shapeStyle.width, top: shapeStyle.height, transform: `translate(-50%, -50%) scale(${inverseScale})` }}
+              onMouseDown={(e) => onShapeInteraction(e, shape.id, 'resize')}
+              onTouchStart={(e) => onShapeInteraction(e, shape.id, 'resize')}
+            >
+              {renderHandleGlyph(isHandleActive('resize'))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+});
 
 function useStageGestures({ activeToolRef, touchState, stageRef, setStage, containerRef }) {
     const rafIdRef = useRef(0);
@@ -444,7 +498,9 @@ function useStageGestures({ activeToolRef, touchState, stageRef, setStage, conta
         const midY = (t1.clientY + t2.clientY) / 2;
         const scaleChange = dist / touchState.current.initialDist;
         const newScale = Math.min(Math.max(0.1, touchState.current.initialScale * scaleChange), 5);
-        const rect = containerRef.current.getBoundingClientRect();
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
         const originX = midX - rect.left;
         const originY = midY - rect.top;
         const dx = (originX - touchState.current.initialStageX) * (newScale / touchState.current.initialScale);
@@ -470,7 +526,7 @@ function useStageGestures({ activeToolRef, touchState, stageRef, setStage, conta
 
       const currentStage = stageRef.current;
       if (e && e.touches && e.touches.length === 1 && activeToolRef.current === TOOLS.PAN) {
-        // После завершения pinch пересобираем baseline, чтобы не было рывка при продолжении pan одним пальцем.
+        // РџРѕСЃР»Рµ Р·Р°РІРµСЂС€РµРЅРёСЏ pinch РїРµСЂРµСЃРѕР±РёСЂР°РµРј baseline, С‡С‚РѕР±С‹ РЅРµ Р±С‹Р»Рѕ СЂС‹РІРєР° РїСЂРё РїСЂРѕРґРѕР»Р¶РµРЅРёРё pan РѕРґРЅРёРј РїР°Р»СЊС†РµРј.
         const touch = e.touches[0];
         touchState.current = {
           initialX: touch.clientX,
@@ -504,6 +560,7 @@ function useShapeTransform({
     activeToolRef,
     shapesRef,
     stageRef,
+    containerRef,
     keepAspectRatioRef,
     setShapes,
     setSelectedId,
@@ -550,12 +607,120 @@ function useShapeTransform({
       if (activeToolRef.current === TOOLS.PAN) return;
       const shape = shapesRef.current.find(s => s.id === id);
       if (!shape || !shape.isVisible) return;
-      if (shape.isLocked && mode !== 'select-only') return;
+      if (mode === 'locked-noop') return;
+      if (shape.isLocked && !['select-only', 'precise-rotate', 'precise-scale', 'precise-pivot'].includes(mode)) return;
 
       const isTouch = e.type.startsWith('touch');
+      const startClientX = isTouch ? e.touches?.[0]?.clientX : e.clientX;
+      const startClientY = isTouch ? e.touches?.[0]?.clientY : e.clientY;
+
+      const clientToWorld = (clientX, clientY, stageSnapshot = stageRef.current) => {
+        const rect = containerRef.current?.getBoundingClientRect();
+        const left = rect?.left ?? 0;
+        const top = rect?.top ?? 0;
+        return {
+          x: (clientX - left - stageSnapshot.x) / stageSnapshot.scale,
+          y: (clientY - top - stageSnapshot.y) / stageSnapshot.scale
+        };
+      };
+
+      const hitTestShape = (s, wx, wy) => {
+        const hitSlop = 8 / Math.max(stageRef.current.scale, 0.01);
+        const distancePointToSegment = (px, py, ax, ay, bx, by) => {
+          const dx = bx - ax;
+          const dy = by - ay;
+          const len2 = dx * dx + dy * dy || 1;
+          let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+          t = Math.max(0, Math.min(1, t));
+          const sx = ax + t * dx;
+          const sy = ay + t * dy;
+          return Math.hypot(px - sx, py - sy);
+        };
+
+        if (s.type === SHAPE_TYPES.LINE) {
+          const x1 = s.x, y1 = s.y, x2 = s.x2 ?? s.x, y2 = s.y2 ?? s.y;
+          const dx = x2 - x1;
+          const dy = y2 - y1;
+          const len2 = dx * dx + dy * dy || 1;
+          let t = ((wx - x1) * dx + (wy - y1) * dy) / len2;
+          t = Math.max(0, Math.min(1, t));
+          const px = x1 + t * dx;
+          const py = y1 + t * dy;
+          return Math.hypot(wx - px, wy - py) <= (14 / Math.max(stageRef.current.scale, 0.01));
+        }
+        if (s.type === SHAPE_TYPES.POLY) {
+          const pts = (s.points || []).map((p) => ({ x: p.x + s.x, y: p.y + s.y }));
+          if (!pts.length) return false;
+          if (!s.isClosed) {
+            const tol = 10 / Math.max(stageRef.current.scale, 0.01);
+            for (let i = 0; i < pts.length - 1; i++) {
+              const a = pts[i], b = pts[i + 1];
+              const dx = b.x - a.x, dy = b.y - a.y;
+              const len2 = dx * dx + dy * dy || 1;
+              let t = ((wx - a.x) * dx + (wy - a.y) * dy) / len2;
+              t = Math.max(0, Math.min(1, t));
+              const px = a.x + t * dx, py = a.y + t * dy;
+              if (Math.hypot(wx - px, wy - py) <= tol) return true;
+            }
+            return false;
+          }
+          let inside = false;
+          for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+            const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+            const intersect = ((yi > wy) !== (yj > wy)) && (wx < (xj - xi) * (wy - yi) / ((yj - yi) || 1e-9) + xi);
+            if (intersect) inside = !inside;
+          }
+          if (inside) return true;
+          for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+            if (distancePointToSegment(wx, wy, pts[j].x, pts[j].y, pts[i].x, pts[i].y) <= hitSlop) return true;
+          }
+          return false;
+        }
+
+        const cx = s.x + s.w / 2;
+        const cy = s.y + s.h / 2;
+        const ang = -((s.rotation || 0) * Math.PI / 180);
+        const cos = Math.cos(ang), sin = Math.sin(ang);
+        const lx = (wx - cx) * cos - (wy - cy) * sin + s.w / 2;
+        const ly = (wx - cx) * sin + (wy - cy) * cos + s.h / 2;
+
+        if (s.type === SHAPE_TYPES.RECT || s.type === SHAPE_TYPES.IMAGE) {
+          return lx >= -hitSlop && lx <= (s.w + hitSlop) && ly >= -hitSlop && ly <= (s.h + hitSlop);
+        }
+        if (s.type === SHAPE_TYPES.CIRCLE) {
+          const rx = (s.w / 2) + hitSlop || 1;
+          const ry = (s.h / 2) + hitSlop || 1;
+          const nx = (lx - rx) / rx;
+          const ny = (ly - ry) / ry;
+          return (nx * nx + ny * ny) <= 1;
+        }
+        if (s.type === SHAPE_TYPES.TRIANGLE) {
+          const p0 = { x: s.w / 2, y: 0 };
+          const p1 = { x: s.w, y: s.h };
+          const p2 = { x: 0, y: s.h };
+          const d = (p1.y - p2.y) * (p0.x - p2.x) + (p2.x - p1.x) * (p0.y - p2.y);
+          const a = ((p1.y - p2.y) * (lx - p2.x) + (p2.x - p1.x) * (ly - p2.y)) / d;
+          const b = ((p2.y - p0.y) * (lx - p2.x) + (p0.x - p2.x) * (ly - p2.y)) / d;
+          const c = 1 - a - b;
+          if (a >= 0 && b >= 0 && c >= 0) return true;
+          return (
+            distancePointToSegment(lx, ly, p0.x, p0.y, p1.x, p1.y) <= hitSlop
+            || distancePointToSegment(lx, ly, p1.x, p1.y, p2.x, p2.y) <= hitSlop
+            || distancePointToSegment(lx, ly, p2.x, p2.y, p0.x, p0.y) <= hitSlop
+          );
+        }
+        return lx >= -hitSlop && lx <= (s.w + hitSlop) && ly >= -hitSlop && ly <= (s.h + hitSlop);
+      };
+
+      if (mode === 'move' && Number.isFinite(startClientX) && Number.isFinite(startClientY)) {
+        const curStage = stageRef.current;
+        const { x: wx, y: wy } = clientToWorld(startClientX, startClientY, curStage);
+        if (!hitTestShape(shape, wx, wy)) return;
+      }
+
       if (isTouch && e.touches.length > 1) {
-        // Не запускаем трансформацию фигуры для multi-touch:
-        // жест должен обработаться на уровне сцены (pinch/pan).
+        // РќРµ Р·Р°РїСѓСЃРєР°РµРј С‚СЂР°РЅСЃС„РѕСЂРјР°С†РёСЋ С„РёРіСѓСЂС‹ РґР»СЏ multi-touch:
+        // Р¶РµСЃС‚ РґРѕР»Р¶РµРЅ РѕР±СЂР°Р±РѕС‚Р°С‚СЊСЃСЏ РЅР° СѓСЂРѕРІРЅРµ СЃС†РµРЅС‹ (pinch/pan).
         return;
       }
 
@@ -573,8 +738,14 @@ function useShapeTransform({
       }
       setActiveHandle({ id, mode, extra });
 
+      if (isTouch && (!e.touches || e.touches.length === 0)) return;
       const startX = isTouch ? e.touches[0].clientX : e.clientX;
       const startY = isTouch ? e.touches[0].clientY : e.clientY;
+      const stageAtStart = stageRef.current;
+      const { x: startWorldX, y: startWorldY } = clientToWorld(startX, startY, stageAtStart);
+      const pivotWorldX0 = shape.x + shape.w * (shape.pivotU ?? 0.5);
+      const pivotWorldY0 = shape.y + shape.h * (shape.pivotV ?? 0.5);
+      const preciseStartDist = Math.max(8, Math.hypot(startWorldX - pivotWorldX0, startWorldY - pivotWorldY0));
       const initial = {
         x: shape.x,
         y: shape.y,
@@ -583,7 +754,13 @@ function useShapeTransform({
         x2: shape.x2,
         y2: shape.y2,
         rotation: shape.rotation,
-        points: Array.isArray(shape.points) ? shape.points.map(p => ({ x: p.x, y: p.y })) : null
+        points: Array.isArray(shape.points) ? shape.points.map(p => ({ x: p.x, y: p.y })) : null,
+        pivotU: shape.pivotU ?? 0.5,
+        pivotV: shape.pivotV ?? 0.5,
+        rotateLever: shape.rotateLever ?? DEFAULT_PRECISE_ROTATE_LEVER,
+        scaleLever: shape.scaleLever ?? DEFAULT_PRECISE_SCALE_LEVER,
+        preciseStartDist,
+        lineLength: Math.hypot((shape.x2 ?? shape.x) - shape.x, (shape.y2 ?? shape.y) - shape.y)
       };
 
       const applyMoveAt = (curX, curY) => {
@@ -609,7 +786,7 @@ function useShapeTransform({
             let newW = Math.max(20, initial.w + dxLocal * 2);
             let newH = Math.max(20, initial.h + dyLocal * 2);
 
-            if ((keepAspectRatioRef.current || s.type === SHAPE_TYPES.IMAGE) && initial.w !== 0 && initial.h !== 0) {
+            if (((s.keepProportions ?? keepAspectRatioRef.current) || s.type === SHAPE_TYPES.IMAGE) && initial.w !== 0 && initial.h !== 0) {
               const ratio = initial.w / initial.h;
               if (Math.abs(dxLocal) > Math.abs(dyLocal)) newH = newW / ratio;
               else newW = newH * ratio;
@@ -619,15 +796,75 @@ function useShapeTransform({
           if (mode === 'rotate') {
             const centerX = initial.x + initial.w / 2;
             const centerY = initial.y + initial.h / 2;
-            const currentMouseX = (curX - currentStage.x) / currentStage.scale;
-            const currentMouseY = (curY - currentStage.y) / currentStage.scale;
+            const { x: currentMouseX, y: currentMouseY } = clientToWorld(curX, curY, currentStage);
             const angle = Math.atan2(currentMouseY - centerY, currentMouseX - centerX);
             return { ...s, rotation: (angle * 180 / Math.PI) + 90 };
           }
           if (mode === 'line-point') {
+            if (s.keepLength) {
+              const anchor = extra === 'start'
+                ? { x: initial.x2 ?? initial.x, y: initial.y2 ?? initial.y }
+                : { x: initial.x, y: initial.y };
+              const raw = extra === 'start'
+                ? { x: initial.x + dxGlobal, y: initial.y + dyGlobal }
+                : { x: (initial.x2 ?? initial.x) + dxGlobal, y: (initial.y2 ?? initial.y) + dyGlobal };
+              let vx = raw.x - anchor.x;
+              let vy = raw.y - anchor.y;
+              let len = Math.hypot(vx, vy);
+              if (len < 0.0001) {
+                vx = extra === 'start' ? (initial.x - anchor.x) : ((initial.x2 ?? initial.x) - anchor.x);
+                vy = extra === 'start' ? (initial.y - anchor.y) : ((initial.y2 ?? initial.y) - anchor.y);
+                len = Math.hypot(vx, vy) || 1;
+              }
+              const k = (initial.lineLength || 1) / len;
+              const constrained = { x: anchor.x + vx * k, y: anchor.y + vy * k };
+              return extra === 'start'
+                ? { ...s, x: constrained.x, y: constrained.y }
+                : { ...s, x2: constrained.x, y2: constrained.y };
+            }
             return extra === 'start'
               ? { ...s, x: initial.x + dxGlobal, y: initial.y + dyGlobal }
               : { ...s, x2: (initial.x2 || 0) + dxGlobal, y2: (initial.y2 || 0) + dyGlobal };
+          }
+          if (mode === 'precise-rotate') {
+            const pivotWorldX = initial.x + initial.w * initial.pivotU;
+            const pivotWorldY = initial.y + initial.h * initial.pivotV;
+            const { x: mouseX, y: mouseY } = clientToWorld(curX, curY, currentStage);
+            const handleAngle = Math.atan2(mouseY - pivotWorldY, mouseX - pivotWorldX);
+            const angle = handleAngle + PRECISE_HANDLE_SPREAD;
+            const leverWorld = Math.hypot(mouseX - pivotWorldX, mouseY - pivotWorldY);
+            const lever = Math.min(420, Math.max(20, leverWorld * currentStage.scale));
+            return {
+              ...s,
+              rotation: (angle * 180 / Math.PI) + 90,
+              rotateLever: lever,
+              rotateHandleAngle: handleAngle
+            };
+          }
+          if (mode === 'precise-scale') {
+            const pivotWorldX = initial.x + initial.w * initial.pivotU;
+            const pivotWorldY = initial.y + initial.h * initial.pivotV;
+            const { x: curPx, y: curPy } = clientToWorld(curX, curY, currentStage);
+            const curDist = Math.max(8, Math.hypot(curPx - pivotWorldX, curPy - pivotWorldY));
+            const currentAngle = Math.atan2(curPy - pivotWorldY, curPx - pivotWorldX);
+            const factor = Math.min(8, Math.max(0.12, curDist / initial.preciseStartDist));
+            const newW = Math.max(20, initial.w * factor);
+            const newH = Math.max(20, initial.h * factor);
+            const scaleLever = Math.min(460, Math.max(20, curDist * currentStage.scale));
+            return {
+              ...s,
+              w: newW,
+              h: newH,
+              x: pivotWorldX - newW * initial.pivotU,
+              y: pivotWorldY - newH * initial.pivotV,
+              scaleLever,
+              scaleAngle: currentAngle
+            };
+          }
+          if (mode === 'precise-pivot') {
+            const u = Math.min(1, Math.max(0, initial.pivotU + (initial.w ? dxGlobal / initial.w : 0)));
+            const v = Math.min(1, Math.max(0, initial.pivotV + (initial.h ? dyGlobal / initial.h : 0)));
+            return { ...s, pivotU: u, pivotV: v };
           }
           if (mode === 'poly-point') {
             const newPoints = [...s.points];
@@ -644,10 +881,18 @@ function useShapeTransform({
       const onMove = (moveEvent) => {
         const isMoveTouch = moveEvent.type.startsWith('touch');
         if (isMoveTouch && moveEvent.touches.length > 1) return;
+        if (isMoveTouch && (!moveEvent.touches || moveEvent.touches.length === 0)) return;
         const curX = isMoveTouch ? moveEvent.touches[0].clientX : moveEvent.clientX;
         const curY = isMoveTouch ? moveEvent.touches[0].clientY : moveEvent.clientY;
-
         lastPointerRef.current = { x: curX, y: curY };
+        const isPreciseMode = mode === 'precise-rotate' || mode === 'precise-scale' || mode === 'precise-pivot';
+
+        if (isPreciseMode) {
+          if (isMoveTouch && moveEvent.cancelable) moveEvent.preventDefault();
+          applyMoveAt(curX, curY);
+          return;
+        }
+
         if (rafIdRef.current) return;
 
         rafIdRef.current = requestAnimationFrame(() => {
@@ -686,6 +931,15 @@ function useShapeTransform({
             };
           }));
         }
+        if (mode === 'precise-rotate' || mode === 'precise-scale') {
+          setShapes(prev => updateShapeById(prev, id, (s) => ({
+            ...s,
+            rotateLever: DEFAULT_PRECISE_ROTATE_LEVER,
+            scaleLever: DEFAULT_PRECISE_SCALE_LEVER,
+            rotateHandleAngle: null,
+            scaleAngle: null
+          })));
+        }
       };
 
       listenersRef.current = { onMove, onUp };
@@ -695,7 +949,7 @@ function useShapeTransform({
       window.addEventListener('touchend', onUp);
       window.addEventListener('touchcancel', onUp);
       window.addEventListener('blur', onUp);
-    }, [activeToolRef, shapesRef, stageRef, keepAspectRatioRef, setShapes, setSelectedId, setIsInteracting, cleanupListeners, updateShapeById, setActiveHandle]);
+    }, [activeToolRef, shapesRef, stageRef, containerRef, keepAspectRatioRef, setShapes, setSelectedId, setIsInteracting, cleanupListeners, updateShapeById, setActiveHandle]);
 
     return { handleShapeInteraction };
   }
@@ -755,9 +1009,10 @@ function appReducer(state, action) {
 function App() {
     const [state, dispatch] = useReducer(appReducer, initialAppState);
     const [activeHandle, setActiveHandle] = useState(null);
-    const [layerColorPickerShapeId, setLayerColorPickerShapeId] = useState<string | null>(null);
     const [imageQuickMenu, setImageQuickMenu] = useState<ImageQuickMenu | null>(null);
-    const [interaction, setInteraction] = useState({ isDragging: false, startAngle: null, initialValue: null });
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [showAddMenu, setShowAddMenu] = useState(false);
+    const [dragLayerId, setDragLayerId] = useState<string | null>(null);
     const {
       stage,
       shapes,
@@ -781,6 +1036,7 @@ function App() {
     const setIsInteracting = useCallback((payload) => dispatch({ type: 'SET_IS_INTERACTING', payload }), []);
 
     const containerRef = useRef(null);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
 
     const touchState = useRef({
       initialDist: 0,
@@ -801,14 +1057,35 @@ function App() {
     useEffect(() => { activeToolRef.current = activeTool; }, [activeTool]);
     useEffect(() => { keepAspectRatioRef.current = keepAspectRatio; }, [keepAspectRatio]);
 
+    useEffect(() => {
+      const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+      document.addEventListener('fullscreenchange', handleFullscreenChange);
+      return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    }, []);
+
+    const toggleFullscreen = useCallback(() => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        }
+      }
+    }, []);
+
     const handleImageUpload = (e) => {
-      const file = e.target.files[0];
+      const input = e.target as HTMLInputElement;
+      const file = input?.files?.[0];
       if (!file) return;
       const reader = new FileReader();
       reader.onload = (event) => {
+        const rawResult = event?.target?.result;
+        if (typeof rawResult !== 'string') return;
         const img = new Image();
         img.onload = () => {
-          const container = containerRef.current.getBoundingClientRect();
+          const containerEl = containerRef.current;
+          if (!containerEl) return;
+          const container = containerEl.getBoundingClientRect();
 
           // Scale image to fit into the current viewport.
           const viewW = container.width / stage.scale;
@@ -829,7 +1106,7 @@ function App() {
             id: generateId(),
             type: SHAPE_TYPES.IMAGE,
             index: shapes.length + 1,
-            src: event.target.result as string,
+            src: rawResult,
             x: centerX - finalW / 2,
             y: centerY - finalH / 2,
             w: finalW,
@@ -842,7 +1119,14 @@ function App() {
             hue: 0,
             saturation: 100,
             brightness: 100,
-            invert: false
+            contrast: 100,
+            invert: false,
+            pivotU: 0.5,
+            pivotV: 0.5,
+            rotateLever: DEFAULT_PRECISE_ROTATE_LEVER,
+            scaleLever: DEFAULT_PRECISE_SCALE_LEVER,
+            scaleAngle: null,
+            rotateHandleAngle: null
           };
 
           // Images are always placed below vector shapes,
@@ -855,9 +1139,9 @@ function App() {
 
           setSelectedId(newImageShape.id);
           setActiveTool(TOOLS.SELECT);
-          e.target.value = ''; // Reset input so the same file can be selected again.
+          input.value = ''; // Reset input so the same file can be selected again.
         };
-        img.src = event.target.result as string;
+        img.src = rawResult;
       };
       reader.readAsDataURL(file);
     };
@@ -870,7 +1154,9 @@ function App() {
         return;
       }
 
-      const container = containerRef.current.getBoundingClientRect();
+      const containerEl = containerRef.current;
+      if (!containerEl) return;
+      const container = containerEl.getBoundingClientRect();
       const centerX = (container.width / 2 - stage.x) / stage.scale;
       const centerY = (container.height / 2 - stage.y) / stage.scale;
 
@@ -896,6 +1182,8 @@ function App() {
         strokeWidth: 2,
         divisions: 1,
         opacity: 60,
+        keepProportions: true,
+        keepLength: false,
         isLocked: false,
         isVisible: true
       };
@@ -965,6 +1253,8 @@ function App() {
         stroke: '#3b82f6',
         strokeWidth: 2,
         opacity: 60,
+        keepProportions: true,
+        keepLength: false,
         isLocked: false,
         isVisible: true
       };
@@ -976,16 +1266,19 @@ function App() {
     };
 
     const handleCanvasMouseDown = (e) => {
-      setImageQuickMenu(null);
+      setShowAddMenu(false);
       if (e.target.closest('button') || e.target.closest('input')) return;
+      setImageQuickMenu(null);
       if (activeTool === TOOLS.PAN) return;
 
       if (activeTool === TOOLS.POLY_DRAW) {
         if (e.type === 'touchstart') e.preventDefault();
-        const clientX = e.clientX || (e.touches && e.touches[0].clientX);
-        const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+        const clientX = e.clientX ?? (e.touches && e.touches[0]?.clientX);
+        const clientY = e.clientY ?? (e.touches && e.touches[0]?.clientY);
         if (clientX === undefined) return;
-        const rect = containerRef.current.getBoundingClientRect();
+        const containerEl = containerRef.current;
+        if (!containerEl) return;
+        const rect = containerEl.getBoundingClientRect();
         const clickX = (clientX - rect.left - stage.x) / stage.scale;
         const clickY = (clientY - rect.top - stage.y) / stage.scale;
         if (polyPoints.length >= 3) {
@@ -999,9 +1292,25 @@ function App() {
         setPolyPoints(prev => [...prev, { x: clickX, y: clickY }]);
       } else {
         setSelectedId(null);
-        setActiveTool(TOOLS.PAN);
       }
     };
+
+    const pointHitsShape = useCallback((shape, wx, wy) => {
+      if (!shape?.isVisible) return false;
+      if (shape.type === SHAPE_TYPES.LINE) {
+        const x1 = shape.x, y1 = shape.y, x2 = shape.x2 ?? shape.x, y2 = shape.y2 ?? shape.y;
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const len2 = dx * dx + dy * dy || 1;
+        let t = ((wx - x1) * dx + (wy - y1) * dy) / len2;
+        t = Math.max(0, Math.min(1, t));
+        const px = x1 + t * dx;
+        const py = y1 + t * dy;
+        const dist = Math.hypot(wx - px, wy - py);
+        return dist <= (18 / Math.max(stage.scale, 0.01));
+      }
+      return wx >= shape.x && wx <= (shape.x + shape.w) && wy >= shape.y && wy <= (shape.y + shape.h);
+    }, [stage.scale]);
 
     const deleteShape = (id) => {
       setShapes(prev => prev.filter(s => s.id !== id));
@@ -1042,6 +1351,42 @@ function App() {
       updateSelectedShape((s) => ({ ...s, fill: color }));
     }, [updateSelectedShape]);
 
+    const cycleStrokePreset = useCallback((shapeId, groupIndex) => {
+      const group = COLOR_GROUPS[groupIndex] || COLOR_GROUPS[0];
+      updateShapeById(shapeId, (s) => ({ ...s, stroke: nextShadeInGroup(s.stroke, group) }));
+    }, [updateShapeById]);
+
+    const cycleFillPreset = useCallback((shapeId, groupIndex) => {
+      const group = COLOR_GROUPS[groupIndex] || COLOR_GROUPS[0];
+      updateShapeById(shapeId, (s) => ({ ...s, fill: nextShadeInGroup(s.fill, group) }));
+    }, [updateShapeById]);
+
+    const copyLineFromShape = useCallback((shapeId) => {
+      const src = shapesRef.current.find((s) => s.id === shapeId && s.type === SHAPE_TYPES.LINE);
+      if (!src) return;
+      const nextStroke = COLOR_PRESETS.find((c) => c.toLowerCase() !== String(src.stroke || '').toLowerCase()) || '#ef4444';
+      const clone = {
+        ...src,
+        id: generateId(),
+        index: shapesRef.current.length + 1,
+        x: src.x + 20,
+        y: src.y + 20,
+        x2: (src.x2 ?? src.x) + 20,
+        y2: (src.y2 ?? src.y) + 20,
+        stroke: nextStroke,
+        isLocked: false
+      };
+      setShapes((prev) => [...prev, clone]);
+      setSelectedId(clone.id);
+      setActiveTool(TOOLS.SELECT);
+      setImageQuickMenu({
+        shapeId: clone.id,
+        control: 'opacity',
+        isPrecision: true,
+        blinkOpacity: null
+      });
+    }, [setShapes, setSelectedId, setActiveTool, setImageQuickMenu, shapesRef]);
+
     const { handleCanvasTouchStart: handleStageTouchStart, handleCanvasTouchMove, handleCanvasTouchEnd, handleCanvasTouchCancel } = useStageGestures({
       activeToolRef,
       touchState,
@@ -1054,6 +1399,7 @@ function App() {
       activeToolRef,
       shapesRef,
       stageRef,
+      containerRef,
       keepAspectRatioRef,
       setShapes,
       setSelectedId,
@@ -1068,11 +1414,10 @@ function App() {
       }
       if (activeToolRef.current !== TOOLS.PAN) {
         setSelectedId(null);
-        setActiveTool(TOOLS.PAN);
         return;
       }
       handleStageTouchStart(e);
-    }, [activeToolRef, handleCanvasMouseDown, handleStageTouchStart, setSelectedId, setActiveTool]);
+    }, [activeToolRef, handleCanvasMouseDown, handleStageTouchStart, setSelectedId]);
 
     const toggleLock = useCallback((id) => {
       updateShapeById(id, (s) => ({ ...s, isLocked: !s.isLocked }));
@@ -1084,24 +1429,33 @@ function App() {
     }, [updateShapeById, selectedId, setSelectedId]);
 
     const toggleAllVisibility = useCallback(() => {
-      const anyVisible = shapes.some(s => s.isVisible);
-      setShapes(prev => prev.map(s => ({ ...s, isVisible: !anyVisible })));
-      if (anyVisible) setSelectedId(null);
-    }, [shapes, setShapes, setSelectedId]);
+      const anyVisible = shapes.some(s => s.type !== 'image' && s.isVisible);
+      setShapes(prev => prev.map(s => s.type === 'image' ? s : { ...s, isVisible: !anyVisible }));
+      if (anyVisible) {
+        const selected = shapes.find(sh => sh.id === selectedId);
+        if (selected && selected.type !== 'image') setSelectedId(null);
+      }
+    }, [shapes, setShapes, selectedId, setSelectedId]);
+
+    const moveLayer = useCallback((dragId: string, overId: string) => {
+      if (!dragId || !overId || dragId === overId) return;
+      setShapes((prev) => {
+        const from = prev.findIndex((s) => s.id === dragId);
+        const to = prev.findIndex((s) => s.id === overId);
+        if (from === -1 || to === -1) return prev;
+        const next = prev.slice();
+        const [item] = next.splice(from, 1);
+        next.splice(to, 0, item);
+        return next.map((s, idx) => ({ ...s, index: idx + 1 }));
+      });
+    }, [setShapes]);
 
     const selectedShape = shapes.find(s => s.id === selectedId);
-    const layerColorTarget = shapes.find(s => s.id === layerColorPickerShapeId) || null;
-    // Используем useMemo для стабильности ссылки на quickImageTarget
+    // РСЃРїРѕР»СЊР·СѓРµРј useMemo РґР»СЏ СЃС‚Р°Р±РёР»СЊРЅРѕСЃС‚Рё СЃСЃС‹Р»РєРё РЅР° quickImageTarget
     const quickImageTarget = useMemo(() => {
       return imageQuickMenu ? shapes.find(s => s.id === imageQuickMenu.shapeId) : null;
     }, [imageQuickMenu, shapes]);
     const supportsFill = !!selectedShape && selectedShape.type !== 'line' && !(selectedShape.type === 'poly' && !selectedShape.isClosed);
-
-    useEffect(() => {
-      if (!layerColorPickerShapeId) return;
-      const exists = shapes.some(s => s.id === layerColorPickerShapeId);
-      if (!exists) setLayerColorPickerShapeId(null);
-    }, [layerColorPickerShapeId, shapes]);
 
     useEffect(() => {
       if (!imageQuickMenu) return;
@@ -1109,52 +1463,68 @@ function App() {
       if (!exists) setImageQuickMenu(null);
     }, [imageQuickMenu, shapes]);
 
-    // Функция для вычисления угла из значения
-    const angleFromValue = useCallback((value, min, max) => {
-      if (max === min) return QUICK_MENU_START_ANGLE;
-      const normalized = (value - min) / (max - min);
-      return QUICK_MENU_START_ANGLE + normalized * QUICK_MENU_SWEEP;
-    }, []);
+    useEffect(() => {
+      if (!imageQuickMenu?.isPrecision) return;
+      if (!selectedId) return;
+      const target = shapes.find((s) => s.id === selectedId);
+      if (!target) return;
+      if (target.id === imageQuickMenu.shapeId) return;
+      setImageQuickMenu((prev) => prev ? {
+        ...prev,
+        shapeId: target.id,
+        control: target.type === SHAPE_TYPES.IMAGE ? 'hue' : 'opacity',
+        blinkOpacity: null
+      } : prev);
+    }, [selectedId, shapes, imageQuickMenu]);
 
-    const openImageQuickMenu = useCallback((shapeId, point) => {
-      if (activeToolRef.current === TOOLS.PAN) return;
+    const openPrecisionMode = useCallback((shapeId: string) => {
+      const shape = shapesRef.current.find((s) => s.id === shapeId);
+      if (!shape) return;
       setSelectedId(shapeId);
-      
-      // Получаем текущее значение из shape для синхронизации угла
-      const shape = shapes.find(s => s.id === shapeId);
-      let currentValue = 0;
-      let min = 0, max = 360;
-      
-      if (shape && shape.type === SHAPE_TYPES.IMAGE) {
-        // Для hue используем начальное значение
-        currentValue = shape.hue ?? 0;
-        min = 0;
-        max = 360;
-      }
-      
-      const initialAngle = angleFromValue(currentValue, min, max);
-      
+      setActiveTool(TOOLS.SELECT);
       setImageQuickMenu({
         shapeId,
-        x: point.x,
-        y: point.y,
-        control: 'hue',
-        initialAngle
+        control: shape.type === SHAPE_TYPES.IMAGE ? 'hue' : 'opacity',
+        isPrecision: true,
+        blinkOpacity: null
       });
-      
-      // Сбрасываем interaction state
-      setInteraction({ isDragging: false, startAngle: null, initialValue: null });
-    }, [activeToolRef, setSelectedId, shapes, angleFromValue]);
+    }, [setSelectedId, setActiveTool, shapesRef]);
+
+    const handleShapeDoubleTap = useCallback((shapeId: string) => {
+      openPrecisionMode(shapeId);
+    }, [openPrecisionMode]);
+
+    const handleCanvasDoubleClick = useCallback((e) => {
+      if (e.target.closest('button') || e.target.closest('input')) return;
+      const containerEl = containerRef.current;
+      if (!containerEl) return;
+      const rect = containerEl.getBoundingClientRect();
+      const wx = (e.clientX - rect.left - stage.x) / stage.scale;
+      const wy = (e.clientY - rect.top - stage.y) / stage.scale;
+      const lockedTop = [...shapesRef.current].reverse().find((s) => s.isLocked && pointHitsShape(s, wx, wy));
+      if (!lockedTop) return;
+      e.preventDefault();
+      openPrecisionMode(lockedTop.id);
+    }, [containerRef, stage.x, stage.y, stage.scale, shapesRef, pointHitsShape, openPrecisionMode]);
+
+    const updateImagePivot = useCallback((shapeId: string, payload: { x: number; y: number; w: number; h: number }) => {
+      updateShapeById(shapeId, (s) => {
+        if (s.type !== SHAPE_TYPES.IMAGE) return s;
+        const u = Math.min(1, Math.max(0, payload.w ? payload.x / payload.w : 0.5));
+        const v = Math.min(1, Math.max(0, payload.h ? payload.y / payload.h : 0.5));
+        return { ...s, pivotU: u, pivotV: v };
+      });
+    }, [updateShapeById]);
 
     const applyQuickImageValue = useCallback((control, value) => {
       if (!imageQuickMenu) return;
-      // Округляем значение для предотвращения микро-изменений
       const roundedValue = Math.round(Number(value) * 10) / 10;
       updateShapeById(imageQuickMenu.shapeId, (s) => {
         if (s.type !== SHAPE_TYPES.IMAGE) return s;
         if (control === 'hue') return { ...s, hue: Math.round(roundedValue) };
         if (control === 'saturation') return { ...s, saturation: Math.round(roundedValue) };
         if (control === 'lightness') return { ...s, brightness: Math.round(roundedValue) };
+        if (control === 'contrast') return { ...s, contrast: Math.round(roundedValue) };
         if (control === 'transparency') return { ...s, opacity: Math.max(0, 100 - Math.round(roundedValue)) };
         return s;
       });
@@ -1162,87 +1532,30 @@ function App() {
 
     const getQuickControlConfig = useCallback((control, shape) => {
       if (!shape) return null;
-      // Используем только значения из shape как единственный источник истины
       if (control === 'hue') return { label: 'Hue', min: 0, max: 360, value: shape.hue ?? 0, suffix: 'deg' };
       if (control === 'saturation') return { label: 'Saturation', min: 0, max: 200, value: shape.saturation ?? 100, suffix: '%' };
       if (control === 'lightness') return { label: 'Lightness', min: 0, max: 200, value: shape.brightness ?? 100, suffix: '%' };
+      if (control === 'contrast') return { label: 'Contrast', min: 0, max: 200, value: shape.contrast ?? 100, suffix: '%' };
       if (control === 'transparency') return { label: 'Transparency', min: 0, max: 100, value: 100 - (shape.opacity ?? 100), suffix: '%' };
       return null;
     }, []);
 
-    const QUICK_MENU_START_ANGLE = 210;
-    const QUICK_MENU_END_ANGLE = 330;
-    const QUICK_MENU_SWEEP = QUICK_MENU_END_ANGLE - QUICK_MENU_START_ANGLE;
+    const isPrecisionOpen = !!imageQuickMenu?.isPrecision && !!quickImageTarget;
+    const isPrecisionImage = !!quickImageTarget && quickImageTarget.type === SHAPE_TYPES.IMAGE;
+    const isPrecisionShape = !!quickImageTarget && quickImageTarget.type !== SHAPE_TYPES.IMAGE;
 
-    const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
-    const polarToCartesian = (cx, cy, radius, angleDeg) => {
-      const angleRad = (angleDeg * Math.PI) / 180;
-      return {
-        x: cx + radius * Math.cos(angleRad),
-        y: cy + radius * Math.sin(angleRad)
-      };
-    };
-
-    const describeArcPath = (cx, cy, radius, startAngle, endAngle) => {
-      const start = polarToCartesian(cx, cy, radius, startAngle);
-      const end = polarToCartesian(cx, cy, radius, endAngle);
-      const largeArcFlag = Math.abs(endAngle - startAngle) > 180 ? 1 : 0;
-      return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
-    };
-
-    // Обновлённая функция для проецирования угла на дугу с поддержкой drag-режима
-    const getAngleOnArc = useCallback((angle, isDragging = false) => {
-      const start = QUICK_MENU_START_ANGLE;
-      const end = QUICK_MENU_END_ANGLE;
-
-      // нормализуем в диапазон [0..360)
-      const a = (angle + 360) % 360;
-
-      // если угол вне дуги — привязываем к ближайшей границе
-      if (a < start && a > end) {
-        const distToStart = Math.abs(a - start);
-        const distToEnd = Math.abs(a - end);
-        return distToStart < distToEnd ? start : end;
+    const toggleImageBlink = useCallback(() => {
+      if (!quickImageTarget || quickImageTarget.type !== SHAPE_TYPES.IMAGE) return;
+      const currentOpacity = quickImageTarget.opacity ?? 100;
+      const savedOpacity = imageQuickMenu?.blinkOpacity ?? null;
+      if (savedOpacity === null) {
+        setImageQuickMenu(prev => prev ? { ...prev, blinkOpacity: currentOpacity } : prev);
+        updateShapeById(quickImageTarget.id, (s) => ({ ...s, opacity: 0 }));
+      } else {
+        updateShapeById(quickImageTarget.id, (s) => ({ ...s, opacity: savedOpacity }));
+        setImageQuickMenu(prev => prev ? { ...prev, blinkOpacity: null } : prev);
       }
-
-      return a;
-    }, [QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE]);
-
-    const applyTransparencyFromPoint = useCallback((clientX, clientY, isInitialDrag = false) => {
-      if (!imageQuickMenu) return;
-      const dx = clientX - imageQuickMenu.x;
-      const dy = clientY - imageQuickMenu.y;
-
-      const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
-      const normalized = (rawAngle + 360) % 360;
-      const angle = getAngleOnArc(normalized, interaction.isDragging);
-      
-      const transparency = ((QUICK_MENU_END_ANGLE - angle) / QUICK_MENU_SWEEP) * 100;
-      applyQuickImageValue('transparency', clamp(transparency, 0, 100));
-    }, [imageQuickMenu, applyQuickImageValue, QUICK_MENU_SWEEP, getAngleOnArc, interaction.isDragging]);
-
-    const applyHSLFromPoint = useCallback((clientX, clientY, control, isInitialDrag = false) => {
-      if (!imageQuickMenu || !quickImageTarget) return;
-      
-      // Если не в режиме drag, игнорируем движение (предотвращаем скачки при переключении)
-      if (!interaction.isDragging && !isInitialDrag) return;
-      
-      const dx = clientX - imageQuickMenu.x;
-      const dy = clientY - imageQuickMenu.y;
-
-      const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
-      const normalized = (rawAngle + 360) % 360;
-      const angle = getAngleOnArc(normalized, interaction.isDragging);
-
-      let min, max;
-      if (control === 'hue') { min = 0; max = 360; }
-      else if (control === 'saturation') { min = 0; max = 200; }
-      else if (control === 'lightness') { min = 0; max = 200; }
-      else { return; }
-
-      const value = ((angle - QUICK_MENU_START_ANGLE) / QUICK_MENU_SWEEP) * (max - min) + min;
-      applyQuickImageValue(control, clamp(value, min, max));
-    }, [imageQuickMenu, applyQuickImageValue, quickImageTarget, QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE, QUICK_MENU_SWEEP, clamp, getAngleOnArc, interaction.isDragging]);
+    }, [quickImageTarget, imageQuickMenu, updateShapeById]);
 
     const getShapeIcon = (shape) => {
       if (!shape) return null;
@@ -1269,13 +1582,20 @@ function App() {
       }
     };
 
+    const getShapeTitle = (shape) => {
+      if (!shape) return 'Object';
+      if (shape.type === SHAPE_TYPES.IMAGE) return 'Image';
+      if (shape.type === SHAPE_TYPES.RECT) return 'Rectangle';
+      if (shape.type === SHAPE_TYPES.CIRCLE) return 'Circle';
+      if (shape.type === SHAPE_TYPES.TRIANGLE) return 'Triangle';
+      if (shape.type === SHAPE_TYPES.LINE) return 'Line';
+      if (shape.type === SHAPE_TYPES.POLY) return 'Polygon';
+      return 'Shape';
+    };
+
     const anyVisible = shapes.some(s => s.isVisible);
-    const visibleImages = useMemo(
-      () => shapes.filter(s => s.isVisible && s.type === SHAPE_TYPES.IMAGE),
-      [shapes]
-    );
-    const visibleNonImageShapes = useMemo(
-      () => shapes.filter(s => s.isVisible && s.type !== SHAPE_TYPES.IMAGE),
+    const visibleShapes = useMemo(
+      () => shapes.filter(s => s.isVisible),
       [shapes]
     );
     const reversedShapes = useMemo(() => [...shapes].reverse(), [shapes]);
@@ -1289,17 +1609,43 @@ function App() {
       <div className="w-full h-screen bg-[#0a0a0a] flex flex-col overflow-hidden text-white touch-none font-sans select-none">
 
         {/* TOP BAR */}
-        <div className="h-14 border-b border-white/5 flex items-center justify-between px-3 shrink-0 bg-[#111] z-50">
+        <div className="h-14 border-b border-white/5 flex items-center justify-between px-3 shrink-0 bg-[#111] z-50 relative">
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleImageUpload} accept="image/*" />
           <div className="flex items-center gap-2">
-            <label className="p-2 bg-blue-600 rounded-lg active:scale-90 transition-all cursor-pointer mr-2">
-              <FileImage size={18} />
-              <input type="file" className="hidden" onChange={handleImageUpload} accept="image/*" />
-            </label>
+            <div className="relative">
+              <button
+                onClick={() => setShowAddMenu((p) => !p)}
+                className="p-2 bg-blue-600 rounded-lg active:scale-90 transition-all border border-blue-400/50 flex items-center gap-1.5"
+                title="Add image or shape"
+              >
+                <Icon name="add" size={18} />
+                <Icon name="expand_more" size={16} />
+              </button>
+              {showAddMenu && (
+                <div className="absolute top-[calc(100%+8px)] left-0 w-44 bg-[#1a1a1a] border border-white/10 rounded-xl p-1.5 z-[90] shadow-2xl">
+                  <button onClick={() => { setShowAddMenu(false); fileInputRef.current?.click(); }} className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-white/10 flex items-center gap-2"><FileImage size={16} /><span>Image</span></button>
+                  <button onClick={() => { addShape(SHAPE_TYPES.RECT); setShowAddMenu(false); }} className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-white/10 flex items-center gap-2"><Square size={16} /><span>Rectangle</span></button>
+                  <button onClick={() => { addShape(SHAPE_TYPES.CIRCLE); setShowAddMenu(false); }} className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-white/10 flex items-center gap-2"><Circle size={16} /><span>Circle</span></button>
+                  <button onClick={() => { addShape(SHAPE_TYPES.TRIANGLE); setShowAddMenu(false); }} className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-white/10 flex items-center gap-2"><Triangle size={16} /><span>Triangle</span></button>
+                  <button onClick={() => { addShape(SHAPE_TYPES.LINE); setShowAddMenu(false); }} className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-white/10 flex items-center gap-2"><Minus className="rotate-45" size={18} /><span>Line</span></button>
+                  <button onClick={() => { addShape(SHAPE_TYPES.POLY); setShowAddMenu(false); }} className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-white/10 flex items-center gap-2"><Pentagon size={16} /><span>Polygon</span></button>
+                </div>
+              )}
+            </div>
             <div className="flex bg-[#222] rounded-lg p-0.5 border border-white/10">
               <button onClick={() => { setActiveTool(TOOLS.SELECT); setPolyPoints([]); }} className={`p-2 rounded-md transition-all ${activeTool === TOOLS.SELECT ? 'bg-white/10 text-white' : 'text-gray-500'}`}><MousePointer2 size={18} /></button>
               <button onClick={() => { setActiveTool(TOOLS.PAN); setPolyPoints([]); }} className={`p-2 rounded-md transition-all ${activeTool === TOOLS.PAN ? 'bg-white/10 text-white' : 'text-gray-500'}`}><Hand size={18} /></button>
             </div>
+            <button
+              onClick={openLayersPanel}
+              className={`p-2 rounded-lg transition-all active:scale-95 border ${showLayers ? 'bg-blue-500 border-blue-500 text-white' : 'bg-[#222] border-white/10 text-gray-500 hover:text-white'}`}
+              title="Layers"
+            >
+              <Layers size={18} />
+            </button>
+          </div>
 
+          <div className="flex items-center gap-2">
             {shapes.length > 0 && (
               <button
                 onClick={toggleAllVisibility}
@@ -1312,19 +1658,9 @@ function App() {
                 </span>
               </button>
             )}
-          </div>
-
-          {activeTool === TOOLS.POLY_DRAW && (
-            <div className="flex items-center gap-2 bg-blue-600/20 px-3 py-1.5 rounded-full border border-blue-500/30">
-              <span className="text-xs font-bold text-blue-400">Shape creation ({polyPoints.length})</span>
-              {polyPoints.length >= 2 && (
-                <button onClick={() => finalizePoly(false)} className="bg-blue-500 text-white p-1 rounded-full active:scale-90 transition-all"><Check size={14} /></button>
-              )}
-              <button onClick={() => { setActiveTool(TOOLS.SELECT); setPolyPoints([]); }} className="text-gray-400 p-1 hover:text-white"><X size={14} /></button>
-            </div>
-          )}
-
-          <div className="flex items-center gap-2">
+            <button onClick={toggleFullscreen} className="p-2 text-gray-500 hover:text-white bg-[#222] rounded-lg transition-all" title="Toggle Fullscreen">
+              {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+            </button>
             {selectedShape && (
               <button onClick={() => { setShowSettings(!showSettings); setShowLayers(false); }} className={`p-2 rounded-lg transition-all ${showSettings ? 'bg-blue-500 text-white' : 'bg-[#222] text-gray-400'}`}><Settings2 size={20} /></button>
             )}
@@ -1337,6 +1673,7 @@ function App() {
           className="flex-1 relative overflow-hidden bg-[#0a0a0a]"
           onContextMenu={(e) => e.preventDefault()}
           onMouseDown={handleCanvasMouseDown}
+          onDoubleClick={handleCanvasDoubleClick}
           onTouchStart={handleCanvasTouchStart}
           onTouchMove={handleCanvasTouchMove}
           onTouchEnd={handleCanvasTouchEnd}
@@ -1348,7 +1685,7 @@ function App() {
             className="absolute origin-top-left will-change-transform"
             style={{ transform: `translate3d(${stage.x}px, ${stage.y}px, 0) scale(${stage.scale})` }}
           >
-            {visibleImages.map(shape => (
+            {visibleShapes.map(shape => (
               <ShapeItem
                 key={shape.id}
                 shape={shape}
@@ -1357,22 +1694,70 @@ function App() {
                 onToggleLock={toggleLock}
                 stageScale={stage.scale}
                 activeHandle={activeHandle}
-                onImageLongPress={openImageQuickMenu}
+                onShapeDoubleTap={handleShapeDoubleTap}
+                isPrecisionMode={isPrecisionOpen && quickImageTarget?.id === shape.id}
+                onImagePrecisionTap={updateImagePivot}
               />
             ))}
 
-            {visibleNonImageShapes.map(shape => (
-              <ShapeItem
-                key={shape.id}
-                shape={shape}
-                isSelected={selectedId === shape.id}
-                onShapeInteraction={handleShapeInteraction}
-                onToggleLock={toggleLock}
-                stageScale={stage.scale}
-                activeHandle={activeHandle}
-                onImageLongPress={openImageQuickMenu}
-              />
-            ))}
+            {isPrecisionOpen && isPrecisionImage && quickImageTarget && (() => {
+              const pivotU = quickImageTarget.pivotU ?? 0.5;
+              const pivotV = quickImageTarget.pivotV ?? 0.5;
+              const pivotX = quickImageTarget.x + quickImageTarget.w * pivotU;
+              const pivotY = quickImageTarget.y + quickImageTarget.h * pivotV;
+              const angle = ((quickImageTarget.rotation ?? 0) - 90) * Math.PI / 180;
+              const isRotateActive = activeHandle?.id === quickImageTarget.id && activeHandle?.mode === 'precise-rotate';
+              const isScaleActive = activeHandle?.id === quickImageTarget.id && activeHandle?.mode === 'precise-scale';
+              const inv = 1 / Math.max(stage.scale, 0.01);
+              // Keep handles at the same default screen distance as the yellow pivot-move handle.
+              const baseRadius = DEFAULT_PRECISE_MOVE_LEVER * inv;
+              const rotateRadius = isRotateActive ? (quickImageTarget.rotateLever ?? DEFAULT_PRECISE_ROTATE_LEVER) * inv : baseRadius;
+              const scaleRadius = isScaleActive ? (quickImageTarget.scaleLever ?? DEFAULT_PRECISE_SCALE_LEVER) * inv : baseRadius;
+              const moveRadius = baseRadius;
+              const rotateHandleAngle = isRotateActive
+                ? (quickImageTarget.rotateHandleAngle ?? (angle - PRECISE_HANDLE_SPREAD))
+                : (angle - PRECISE_HANDLE_SPREAD);
+              const scaleHandleAngle = isScaleActive
+                ? (quickImageTarget.scaleAngle ?? (angle + PRECISE_HANDLE_SPREAD))
+                : (angle + PRECISE_HANDLE_SPREAD);
+              const rotateHandle = { x: pivotX + Math.cos(rotateHandleAngle) * rotateRadius, y: pivotY + Math.sin(rotateHandleAngle) * rotateRadius };
+              const scaleHandle = { x: pivotX + Math.cos(scaleHandleAngle) * scaleRadius, y: pivotY + Math.sin(scaleHandleAngle) * scaleRadius };
+              const moveHandle = { x: pivotX - Math.cos(angle) * moveRadius, y: pivotY - Math.sin(angle) * moveRadius };
+              return (
+                <div className="absolute z-50 pointer-events-none">
+                  <svg className="overflow-visible" style={{ width: 1, height: 1 }}>
+                    <line x1={pivotX} y1={pivotY} x2={rotateHandle.x} y2={rotateHandle.y} stroke="#60a5fa" strokeDasharray="4 4" strokeWidth={2 * inv} />
+                    <line x1={pivotX} y1={pivotY} x2={scaleHandle.x} y2={scaleHandle.y} stroke="#34d399" strokeDasharray="4 4" strokeWidth={2 * inv} />
+                    <line x1={pivotX} y1={pivotY} x2={moveHandle.x} y2={moveHandle.y} stroke="#facc15" strokeDasharray="4 4" strokeWidth={2 * inv} />
+                    <circle cx={pivotX} cy={pivotY} r={3.5 * inv} fill="#facc15" stroke="#111827" strokeWidth={1.5 * inv} />
+                  </svg>
+                  <button
+                    className="absolute pointer-events-auto bg-[#1f2937] border border-yellow-400 text-yellow-300 rounded-full p-2"
+                    style={{ left: moveHandle.x, top: moveHandle.y, transform: `translate(-50%, -50%) scale(${inv})` }}
+                    onMouseDown={(e) => handleShapeInteraction(e, quickImageTarget.id, 'precise-pivot')}
+                    onTouchStart={(e) => handleShapeInteraction(e, quickImageTarget.id, 'precise-pivot')}
+                  >
+                    <Icon name="open_with" size={15} />
+                  </button>
+                  <button
+                    className="absolute pointer-events-auto bg-[#1f2937] border border-blue-400 text-blue-300 rounded-full p-2"
+                    style={{ left: rotateHandle.x, top: rotateHandle.y, transform: `translate(-50%, -50%) scale(${inv})` }}
+                    onMouseDown={(e) => handleShapeInteraction(e, quickImageTarget.id, 'precise-rotate')}
+                    onTouchStart={(e) => handleShapeInteraction(e, quickImageTarget.id, 'precise-rotate')}
+                  >
+                    <RotateCw size={16} />
+                  </button>
+                  <button
+                    className="absolute pointer-events-auto bg-[#1f2937] border border-emerald-400 text-emerald-300 rounded-full p-2"
+                    style={{ left: scaleHandle.x, top: scaleHandle.y, transform: `translate(-50%, -50%) scale(${inv})` }}
+                    onMouseDown={(e) => handleShapeInteraction(e, quickImageTarget.id, 'precise-scale')}
+                    onTouchStart={(e) => handleShapeInteraction(e, quickImageTarget.id, 'precise-scale')}
+                  >
+                    <Icon name="zoom_out_map" size={16} />
+                  </button>
+                </div>
+              );
+            })()}
 
             {polyPoints.length > 0 && (
               <svg className="absolute overflow-visible pointer-events-none z-40" style={{ left: 0, top: 0, width: 1, height: 1 }}>
@@ -1401,28 +1786,21 @@ function App() {
           <div className="absolute bottom-24 right-4 bg-white/5 backdrop-blur px-2 py-1 rounded text-[10px] text-gray-400 font-mono select-none">{Math.round(stage.scale * 100)}%</div>
         </div>
 
-        {/* LEFT SHAPES PANEL */}
-        <div
-          className="fixed top-1/2 -translate-y-1/2 bg-[#111] border border-white/10 rounded-r-2xl z-[70] py-2 px-1.5 flex flex-col items-center gap-1.5"
-          style={{ left: 'max(env(safe-area-inset-left), 0px)' }}
-        >
-          <button
-            onClick={openLayersPanel}
-            className={`p-3 rounded-xl transition-all active:scale-95 ${showLayers ? 'bg-blue-500 text-white' : 'text-gray-500 hover:text-gray-300'}`}
-            title="Layers"
-          >
-            <Layers size={22} />
-          </button>
-          <div className="h-px w-8 bg-white/10 my-1" />
-          <button onClick={() => addShape(SHAPE_TYPES.RECT)} className="p-3 text-gray-500 hover:text-white active:scale-95 transition-all"><Square size={20} /></button>
-          <button onClick={() => addShape(SHAPE_TYPES.CIRCLE)} className="p-3 text-gray-500 hover:text-white active:scale-95 transition-all"><Circle size={20} /></button>
-          <button onClick={() => addShape(SHAPE_TYPES.TRIANGLE)} className="p-3 text-gray-500 hover:text-white active:scale-95 transition-all"><Triangle size={20} /></button>
-          <button onClick={() => addShape(SHAPE_TYPES.LINE)} className="p-3 text-gray-500 hover:text-white active:scale-95 transition-all"><Minus className="rotate-45" size={24} /></button>
-          <button onClick={() => addShape(SHAPE_TYPES.POLY)} className={`p-3 transition-all active:scale-95 ${activeTool === TOOLS.POLY_DRAW ? 'text-blue-500' : 'text-gray-500 hover:text-white'}`}><Pentagon size={22} /></button>
-        </div>
+        {activeTool === TOOLS.POLY_DRAW && (
+          <div className="absolute left-1/2 -translate-x-1/2 bottom-4 z-[112] flex items-center gap-2 bg-blue-600/20 px-3 py-1.5 rounded-full border border-blue-500/30">
+            <span className="text-xs font-bold text-blue-400">Shape creation ({polyPoints.length})</span>
+            {polyPoints.length >= 2 && (
+              <button onClick={() => finalizePoly(false)} className="bg-blue-500 text-white p-1 rounded-full active:scale-90 transition-all"><Check size={14} /></button>
+            )}
+            <button onClick={() => { setActiveTool(TOOLS.SELECT); setPolyPoints([]); }} className="text-gray-400 p-1 hover:text-white"><X size={14} /></button>
+          </div>
+        )}
 
         {showLayers && (
-          <div className="absolute inset-y-0 right-0 w-80 bg-[#111]/95 backdrop-blur-xl border-l border-white/10 z-[60] flex flex-col animate-in slide-in-from-right duration-200 shadow-2xl pb-[env(safe-area-inset-bottom)]">
+          <div
+            className="absolute inset-x-0 bottom-0 bg-[#111]/95 backdrop-blur-xl border-t border-white/10 z-[140] flex flex-col animate-in slide-in-from-bottom duration-200 shadow-2xl pb-[env(safe-area-inset-bottom)]"
+            style={{ maxHeight: `min(70vh, ${Math.max(180, 120 + shapes.length * 62)}px)` }}
+          >
             <div className="p-5 border-b border-white/5 flex justify-between items-center bg-[#111]">
               <div className="flex flex-col">
                 <span className="font-bold text-xs text-blue-500 uppercase tracking-widest">Layers</span>
@@ -1444,30 +1822,43 @@ function App() {
                 reversedShapes.map(shape => (
                   <div
                     key={shape.id}
-                    onClick={(e) => { e.stopPropagation(); setSelectedId(shape.id); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (shape.isLocked) return;
+                      setSelectedId(shape.id);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      handleShapeDoubleTap(shape.id);
+                    }}
+                    onDragOver={(e) => { e.preventDefault(); }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (!dragLayerId) return;
+                      moveLayer(dragLayerId, shape.id);
+                      setDragLayerId(null);
+                    }}
                     className={`flex items-center gap-1.5 p-1.5 rounded-xl transition-all cursor-pointer border ${selectedId === shape.id ? 'bg-blue-600/15 border-blue-500/40' : 'hover:bg-white/5 border-transparent'}`}
                   >
                     <div className="w-8 flex justify-center shrink-0">
-                      <span className={`text-[11px] font-mono font-black ${shape.isVisible ? 'text-gray-400' : 'text-gray-700'}`}>
+                      <span
+                        draggable
+                        onDragStart={(e) => {
+                          e.stopPropagation();
+                          setDragLayerId(shape.id);
+                        }}
+                        onDragEnd={() => setDragLayerId(null)}
+                        className={`text-[11px] font-mono font-black cursor-grab active:cursor-grabbing ${shape.isVisible ? 'text-gray-400' : 'text-gray-700'}`}
+                      >
                         {shape.index}
                       </span>
                     </div>
                     <label className={`w-10 h-10 flex items-center justify-center shrink-0 rounded-lg border border-white/5 transition-opacity cursor-pointer relative overflow-hidden ${shape.isVisible ? 'opacity-100 bg-white/5' : 'opacity-30'}`}>
                       {getShapeIcon(shape)}
-                      {shape.type !== 'image' && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setLayerColorPickerShapeId(shape.id);
-                          }}
-                          className="absolute inset-0"
-                          title="Shape color"
-                        />
-                      )}
                     </label>
-                    <button onClick={(e) => { e.stopPropagation(); toggleVisibility(shape.id); }} className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all active:scale-90 ${shape.isVisible ? 'text-blue-400 bg-blue-500/10' : 'text-gray-700 bg-white/5'}`}><Eye size={18} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); toggleVisibility(shape.id); }} className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all active:scale-90 ${shape.isVisible ? 'text-blue-400 bg-blue-500/10' : 'text-gray-700 bg-white/5'}`}>{shape.isVisible ? <Eye size={18} /> : <EyeOff size={18} />}</button>
                     <button onClick={(e) => { e.stopPropagation(); toggleLock(shape.id); }} className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all active:scale-90 ${shape.isLocked ? 'text-orange-500 bg-orange-500/15' : 'text-gray-700 bg-white/5'}`}><Lock size={18} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); deleteShape(shape.id); }} className="w-10 h-10 flex items-center justify-center text-gray-700 hover:text-red-500 hover:bg-red-500/15 rounded-lg transition-all active:scale-90"><Trash2 size={18} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); deleteShape(shape.id); }} className="ml-auto w-10 h-10 flex items-center justify-center text-gray-700 hover:text-red-500 hover:bg-red-500/15 rounded-lg transition-all active:scale-90"><Trash2 size={18} /></button>
                   </div>
                 ))
               )}
@@ -1525,7 +1916,7 @@ function App() {
                   <div className="flex items-center gap-3">
                     <Palette size={16} className="text-gray-500" />
                     <div className="flex-1">
-                      <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Hue</span><span>{selectedShape.hue || 0}°</span></div>
+                      <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Hue</span><span>{selectedShape.hue || 0}В°</span></div>
                       <input type="range" min="0" max="360" value={selectedShape.hue || 0} onChange={e => updateSelectedShape(s => ({ ...s, hue: Number(e.target.value) }))} className="w-full h-1.5 rounded-lg appearance-none" style={{ background: 'linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)' }} />
                     </div>
                   </div>
@@ -1543,6 +1934,14 @@ function App() {
                     <div className="flex-1">
                       <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Brightness</span><span>{selectedShape.brightness ?? 100}%</span></div>
                       <input type="range" min="0" max="200" value={selectedShape.brightness ?? 100} onChange={e => updateSelectedShape(s => ({ ...s, brightness: Number(e.target.value) }))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <Contrast size={16} className="text-gray-500" />
+                    <div className="flex-1">
+                      <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Contrast</span><span>{selectedShape.contrast ?? 100}%</span></div>
+                      <input type="range" min="0" max="200" value={selectedShape.contrast ?? 100} onChange={e => updateSelectedShape(s => ({ ...s, contrast: Number(e.target.value) }))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
                     </div>
                   </div>
                 </div>
@@ -1667,290 +2066,162 @@ function App() {
           </div>
         )}
 
-        {layerColorTarget && (
-          <div
-            className="fixed inset-0 z-[120] bg-black/55 backdrop-blur-[1px] flex items-center justify-center p-4"
-            onClick={() => setLayerColorPickerShapeId(null)}
-          >
-            <div
-              className="w-full max-w-xs bg-[#1f2127] border border-white/10 rounded-3xl p-4 shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-semibold text-white">Choose shape color</span>
-                <button
-                  onClick={() => setLayerColorPickerShapeId(null)}
-                  className="text-gray-400 hover:text-white p-1"
-                >
-                  <X size={16} />
-                </button>
+                {isPrecisionOpen && quickImageTarget && (
+          <div className="absolute inset-x-0 bottom-0 z-[115] bg-[#14161b]/95 border-t border-white/10 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))]">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden">{getShapeIcon(quickImageTarget)}</div>
+                <div className="leading-tight">
+                  <div className="text-xs text-gray-300 font-semibold">{getShapeTitle(quickImageTarget)}</div>
+                  <div className="text-[10px] text-gray-500">{quickImageTarget.stroke || quickImageTarget.fill || 'No color'}</div>
+                </div>
               </div>
-              <div className="grid grid-cols-5 gap-2.5 mb-3">
-                {COLOR_PRESETS.map((color) => (
-                  <button
-                    key={`layer-modal-${color}`}
-                    onClick={() => {
-                      updateShapeColor(layerColorTarget.id, color);
-                      setLayerColorPickerShapeId(null);
-                    }}
-                    className={`w-9 h-9 rounded-full border-2 transition-transform active:scale-90 ${layerColorTarget.stroke === color ? 'border-white scale-105' : 'border-white/20'}`}
-                    style={{ backgroundColor: color }}
-                    title={color}
-                  />
-                ))}
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  onClick={() => {
-                    updateShapeColor(layerColorTarget.id, 'transparent');
-                    setLayerColorPickerShapeId(null);
-                  }}
-                  className={`px-3 py-2 rounded-lg border text-xs transition-colors ${layerColorTarget.stroke === 'transparent' ? 'bg-blue-500/20 border-blue-400/60 text-blue-300' : 'bg-white/5 border-white/10 text-gray-300 hover:text-white'}`}
-                >
-                  No stroke
-                </button>
-                <button
-                  onClick={() => setLayerColorPickerShapeId(null)}
-                  className="px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-xs text-gray-300 hover:text-white"
-                >
-                  Close
-                </button>
-              </div>
+              <button onClick={() => setImageQuickMenu(null)} className="p-1.5 rounded-md border border-white/10 bg-white/5 text-gray-300"><X size={14} /></button>
             </div>
-          </div>
-        )}
 
-        {imageQuickMenu && quickImageTarget && (
-          <>
-            <div className="fixed inset-0 z-[115]" onClick={(e) => { e.stopPropagation(); setImageQuickMenu(null); }} />
-            <div
-              className="fixed z-[116] pointer-events-auto"
-              style={{ left: imageQuickMenu.x, top: imageQuickMenu.y, transform: 'translate(-50%, -50%)' }}
-            >
-              <div className="relative w-80 h-80">
-                {imageQuickMenu.control === 'transparency' && (() => {
-                  const center = 160;
-                  const arcRadius = 135;
-                  const cfg = getQuickControlConfig('transparency', quickImageTarget);
-                  // Используем значение из shape как единственный источник истины
-                  const transparencyValue = cfg ? cfg.value : 0;
-                  const angle = QUICK_MENU_END_ANGLE - (transparencyValue / 100) * QUICK_MENU_SWEEP;
-                  const knob = polarToCartesian(center, center, arcRadius, angle);
-                  const backgroundArc = describeArcPath(center, center, arcRadius, QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE);
-                  const valueArc = describeArcPath(center, center, arcRadius, angle, QUICK_MENU_END_ANGLE);
-                  return (
-                    <svg
-                      className="absolute inset-0 pointer-events-none"
-                      viewBox="0 0 320 320"
-                      style={{ pointerEvents: 'none' }}
-                    >
-                      <path d={backgroundArc} stroke="rgba(255,255,255,0.16)" strokeWidth="20" fill="none" strokeLinecap="round" />
-                      <path d={valueArc} stroke="#22d3ee" strokeWidth="20" fill="none" strokeLinecap="round" />
-                      <circle cx={knob.x} cy={knob.y} r="11" fill="#111827" stroke="#22d3ee" strokeWidth="3" />
-                    </svg>
-                  );
-                })()}
-
-                {['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control) && (() => {
-                  const center = 160;
-                  const arcRadius = 135;
-                  const control = imageQuickMenu.control;
-                  const cfg = getQuickControlConfig(control, quickImageTarget);
-                  if (!cfg) return null;
-                  // Используем значение из shape как единственный источник истины
-                  const currentValue = cfg.value;
-                  const normalizedValue = (currentValue - cfg.min) / (cfg.max - cfg.min);
-                  const angle = QUICK_MENU_START_ANGLE + normalizedValue * QUICK_MENU_SWEEP;
-                  const knob = polarToCartesian(center, center, arcRadius, angle);
-                  const backgroundArc = describeArcPath(center, center, arcRadius, QUICK_MENU_START_ANGLE, QUICK_MENU_END_ANGLE);
-                  const valueArc = describeArcPath(center, center, arcRadius, QUICK_MENU_START_ANGLE, angle);
-
-                  let arcColor = '#22d3ee';
-                  if (control === 'hue') arcColor = '#f472b6';
-                  if (control === 'saturation') arcColor = '#a78bfa';
-                  if (control === 'lightness') arcColor = '#fbbf24';
-
-                  return (
-                    <svg
-                      className="absolute inset-0 pointer-events-none"
-                      viewBox="0 0 320 320"
-                      style={{ pointerEvents: 'none' }}
-                    >
-                      <path d={backgroundArc} stroke="rgba(255,255,255,0.16)" strokeWidth="20" fill="none" strokeLinecap="round" />
-                      <path d={valueArc} stroke={arcColor} strokeWidth="20" fill="none" strokeLinecap="round" />
-                      <circle cx={knob.x} cy={knob.y} r="11" fill="#111827" stroke={arcColor} strokeWidth="3" />
-                    </svg>
-                  );
-                })()}
-
-                <div
-                  className="absolute inset-0 z-10 touch-none"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (!imageQuickMenu.control) return;
-                    
-                    // Начинаем drag-режим
-                    setInteraction({ isDragging: true, startAngle: null, initialValue: null });
-                    
-                    if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.clientX, e.clientY, true);
-                    else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.clientX, e.clientY, imageQuickMenu.control, true);
-                  }}
-                  onMouseMove={(e) => {
-                    if (e.buttons === 1) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (!imageQuickMenu.control || !interaction.isDragging) return;
-                      if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.clientX, e.clientY);
-                      else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.clientX, e.clientY, imageQuickMenu.control);
-                    }
-                  }}
-                  onMouseUp={() => {
-                    setInteraction({ isDragging: false, startAngle: null, initialValue: null });
-                  }}
-                  onMouseLeave={() => {
-                    setInteraction({ isDragging: false, startAngle: null, initialValue: null });
-                  }}
-                  onTouchStart={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (!imageQuickMenu.control) return;
-                    
-                    // Начинаем drag-режим
-                    setInteraction({ isDragging: true, startAngle: null, initialValue: null });
-                    
-                    if (e.touches && e.touches[0]) {
-                      if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY, true);
-                      else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, imageQuickMenu.control, true);
-                    }
-                  }}
-                  onTouchMove={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (!imageQuickMenu.control || !interaction.isDragging) return;
-                    if (e.touches && e.touches[0]) {
-                      if (imageQuickMenu.control === 'transparency') applyTransparencyFromPoint(e.touches[0].clientX, e.touches[0].clientY);
-                      else if (['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control)) applyHSLFromPoint(e.touches[0].clientX, e.touches[0].clientY, imageQuickMenu.control);
-                    }
-                  }}
-                  onTouchEnd={() => {
-                    setInteraction({ isDragging: false, startAngle: null, initialValue: null });
-                  }}
-                  onTouchCancel={() => {
-                    setInteraction({ isDragging: false, startAngle: null, initialValue: null });
-                  }}
-                >
-                  <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10">
+            {isPrecisionImage && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 overflow-x-auto">
+                  {['hue', 'saturation', 'lightness', 'contrast', 'transparency'].map((key) => (
                     <button
-                      onClick={() => setImageQuickMenu(null)}
-                      onMouseDown={(e) => { e.stopPropagation(); setImageQuickMenu(null); }}
-                      onTouchStart={(e) => { e.stopPropagation(); setImageQuickMenu(null); }}
-                      className="w-12 h-12 rounded-full border border-white/10 text-black bg-[#2d322f] text-lg font-bold flex items-center justify-center relative z-20"
-                    >X</button>
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                      <div className="relative w-full h-full">
-                        {['hue', 'saturation', 'lightness', 'transparency'].map((key, idx) => {
-                          const control = { hue: 'H', saturation: 'S', lightness: 'L', transparency: 'Tr' }[key];
-                          const isActive = imageQuickMenu.control === key;
-                          let activeClass = 'border-cyan-300 text-cyan-300';
-                          if (key === 'hue') activeClass = 'border-pink-400 text-pink-400';
-                          if (key === 'saturation') activeClass = 'border-purple-400 text-purple-400';
-                          if (key === 'lightness') activeClass = 'border-amber-400 text-amber-400';
-                          if (key === 'transparency') activeClass = 'border-cyan-300 text-cyan-300';
-
-                          const positions = [
-                            { right: 'auto', left: '-44px', top: '50%', transform: 'translateY(-50%)' },
-                            { right: '-44px', left: 'auto', top: '50%', transform: 'translateY(-50%)' },
-                            { right: 'auto', left: '50%', top: '-44px', transform: 'translateX(-50%)' },
-                            { right: 'auto', left: '50%', bottom: '-44px', transform: 'translateX(-50%)' }
-                          ];
-
-                          return (
-                            <button
-                              key={key}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                
-                                // Получаем текущее значение из shape для синхронизации угла
-                                const shape = quickImageTarget;
-                                let currentValue = 0;
-                                let min = 0, max = 360;
-                                
-                                if (shape) {
-                                  if (key === 'hue') {
-                                    currentValue = shape.hue ?? 0;
-                                    min = 0;
-                                    max = 360;
-                                  } else if (key === 'saturation') {
-                                    currentValue = shape.saturation ?? 100;
-                                    min = 0;
-                                    max = 200;
-                                  } else if (key === 'lightness') {
-                                    currentValue = shape.brightness ?? 100;
-                                    min = 0;
-                                    max = 200;
-                                  } else if (key === 'transparency') {
-                                    currentValue = 100 - (shape.opacity ?? 100);
-                                    min = 0;
-                                    max = 100;
-                                  }
-                                }
-                                
-                                const newInitialAngle = angleFromValue(currentValue, min, max);
-                                
-                                setImageQuickMenu((prev) => {
-                                  if (!prev) return prev;
-                                  // Переключаем контроль и обновляем initialAngle для нового контрола
-                                  return { ...prev, control: key, initialAngle: newInitialAngle };
-                                });
-                                
-                                // Сбрасываем interaction state при переключении
-                                setInteraction({ isDragging: false, startAngle: null, initialValue: null });
-                              }}
-                              className={`absolute w-10 h-10 rounded-full border bg-[#242826] text-sm font-semibold pointer-events-auto ${isActive ? activeClass : 'border-white/10 text-cyan-400'}`}
-                              style={positions[idx]}
-                            >{control}</button>
-                          );
-                        })}
+                      key={key}
+                      onClick={() => setImageQuickMenu(prev => prev ? { ...prev, control: key } : prev)}
+                      className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${imageQuickMenu?.control === key ? 'bg-blue-500/20 border-blue-400/60 text-blue-300' : 'bg-white/5 border-white/10 text-gray-400'}`}
+                    >
+                      {{ hue: 'H', saturation: 'S', lightness: 'L', contrast: 'C', transparency: 'Tr' }[key]}
+                    </button>
+                  ))}
+                  <button onClick={toggleImageBlink} className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${(imageQuickMenu?.blinkOpacity ?? null) === null ? 'bg-white/5 border-white/10 text-gray-300' : 'bg-cyan-500/20 border-cyan-400/50 text-cyan-300'}`}><Eye size={14} /></button>
+                  <button
+                    onClick={() => toggleLock(quickImageTarget.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${quickImageTarget.isLocked ? 'bg-orange-500/20 border-orange-400/50 text-orange-300' : 'bg-white/5 border-white/10 text-gray-300'}`}
+                  >
+                    {quickImageTarget.isLocked ? <Lock size={14} /> : <Unlock size={14} />}
+                  </button>
+                </div>
+                {(() => {
+                  const cfg = getQuickControlConfig(imageQuickMenu?.control || 'hue', quickImageTarget);
+                  if (!cfg) return null;
+                  return (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[11px] text-gray-400">
+                        <span>{cfg.label}</span>
+                        <span className="font-mono text-blue-300">{Math.round(cfg.value)}{cfg.suffix}</span>
                       </div>
+                      <input
+                        type="range"
+                        min={cfg.min}
+                        max={cfg.max}
+                        value={cfg.value}
+                        onChange={(e) => applyQuickImageValue(imageQuickMenu?.control || 'hue', Number(e.target.value))}
+                        className="w-full h-2 bg-white/10 rounded-lg appearance-none accent-blue-500"
+                      />
                     </div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
-            </div>
-            {imageQuickMenu.control && ['hue', 'saturation', 'lightness'].includes(imageQuickMenu.control) && (() => {
-              const cfg = getQuickControlConfig(imageQuickMenu.control, quickImageTarget);
-              if (!cfg) return null;
+            )}
 
-              // Используем значение из shape как единственный источник истины
-              const displayValue = cfg.value;
+            {isPrecisionShape && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] text-gray-500">Stroke</span>
+                  {COLOR_GROUPS.map((group, idx) => (
+                    <button
+                      key={`stroke-group-${idx}`}
+                      onClick={() => cycleStrokePreset(quickImageTarget.id, idx)}
+                      className="w-7 h-7 rounded-full border-2 border-white/20"
+                      style={{ backgroundColor: group[0] }}
+                    />
+                  ))}
+                  <button onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, stroke: 'transparent' }))} className="w-7 h-7 rounded-full border border-white/30 bg-white/5 text-gray-300 text-[10px] leading-none">/</button>
 
-              let labelColor = 'text-cyan-300';
-              if (imageQuickMenu.control === 'hue') labelColor = 'text-pink-400';
-              if (imageQuickMenu.control === 'saturation') labelColor = 'text-purple-400';
-              if (imageQuickMenu.control === 'lightness') labelColor = 'text-amber-400';
-
-              return (
-                <div className="fixed left-1/2 -translate-x-1/2 bottom-6 z-[120] text-sm font-mono bg-[#1d1f25]/90 border border-white/10 px-3 py-1.5 rounded-lg flex items-center gap-2">
-                  <span className="text-gray-400">{cfg.label}:</span>
-                  <span className={`${labelColor} font-bold`}>{Math.round(displayValue)}{cfg.suffix}</span>
+                  {quickImageTarget.type !== 'line' && (
+                    <>
+                      <span className="ml-2 text-[10px] text-gray-500">Fill</span>
+                      {COLOR_GROUPS.map((group, idx) => (
+                        <button
+                          key={`fill-group-${idx}`}
+                          onClick={() => cycleFillPreset(quickImageTarget.id, idx)}
+                          className="w-7 h-7 rounded-full border-2 border-white/20"
+                          style={{ backgroundColor: group[0] }}
+                        />
+                      ))}
+                      <button onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, fill: 'transparent' }))} className="w-7 h-7 rounded-full border border-white/30 bg-white/5 text-gray-300 text-[10px] leading-none">/</button>
+                    </>
+                  )}
                 </div>
-              );
-            })()}
-            {imageQuickMenu.control === 'transparency' && (() => {
-              const cfg = getQuickControlConfig('transparency', quickImageTarget);
-              if (!cfg) return null;
-              // Используем значение из shape как единственный источник истины
-              const displayValue = cfg.value;
-              return (
-                <div className="fixed left-1/2 -translate-x-1/2 bottom-6 z-[120] text-cyan-300 text-sm font-mono bg-[#1d1f25]/90 border border-white/10 px-3 py-1.5 rounded-lg">
-                  Transparency: {Math.round(displayValue)}%
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => toggleLock(quickImageTarget.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs border ${quickImageTarget.isLocked ? 'bg-orange-500/20 border-orange-400/50 text-orange-300' : 'bg-white/5 border-white/10 text-gray-300'}`}
+                  >
+                    {quickImageTarget.isLocked ? <Lock size={14} /> : <Unlock size={14} />}
+                  </button>
+                  <button
+                    onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, keepProportions: !(s.keepProportions ?? true) }))}
+                    className={`px-3 py-1.5 rounded-lg text-xs border ${(quickImageTarget.keepProportions ?? true) ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300' : 'bg-white/5 border-white/10 text-gray-300'}`}
+                  >
+                    Keep proportions
+                  </button>
+                  {quickImageTarget.type === 'line' && (
+                    <>
+                      <button
+                        onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, keepLength: !s.keepLength }))}
+                        className={`px-3 py-1.5 rounded-lg text-xs border ${quickImageTarget.keepLength ? 'bg-amber-500/20 border-amber-400/50 text-amber-300' : 'bg-white/5 border-white/10 text-gray-300'}`}
+                      >
+                        Keep length
+                      </button>
+                      <button
+                        onClick={() => copyLineFromShape(quickImageTarget.id)}
+                        className="px-3 py-1.5 rounded-lg text-xs border bg-blue-500/20 border-blue-400/50 text-blue-300"
+                      >
+                        Copy
+                      </button>
+                    </>
+                  )}
                 </div>
-              );
-            })()}
-          </>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px] text-gray-400">
+                    <span>Opacity</span>
+                    <span className="font-mono text-blue-300">{Math.round(quickImageTarget.opacity ?? 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={quickImageTarget.opacity ?? 100}
+                    onChange={(e) => updateShapeById(quickImageTarget.id, (s) => ({ ...s, opacity: Number(e.target.value) }))}
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none accent-blue-500"
+                  />
+                </div>
+
+                {quickImageTarget.type === 'line' && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[11px] text-gray-400">
+                      <span>Division count</span>
+                      <span className="font-mono text-blue-300">{(quickImageTarget.divisions || 1) + 1}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={6}
+                      step={1}
+                      value={quickImageTarget.divisions || 1}
+                      onChange={(e) => updateShapeById(quickImageTarget.id, (s) => ({ ...s, divisions: Number(e.target.value) }))}
+                      className="w-full h-2 bg-white/10 rounded-lg appearance-none accent-blue-500"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
     );
   }
 export default App;
+
+
