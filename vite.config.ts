@@ -6,7 +6,7 @@ export default defineConfig(({ command }) => {
 
   return {
     plugins: [react()],
-    root: '.',
+    root: 'src',
     // For GitHub Pages project sites use "/<repo>/".
     base: command === 'serve' ? '/' : repoName ? `/${repoName}/` : '/FigLi_G/',
     build: {

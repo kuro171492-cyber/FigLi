@@ -17,6 +17,7 @@ export const Icon: React.FC<IconProps> = ({
 }) => (
   <span
     className={`material-symbols-outlined ${className}`.trim()}
+    aria-hidden="true"
     style={{
       fontSize: size,
       lineHeight: 1,

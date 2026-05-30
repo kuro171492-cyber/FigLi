@@ -777,7 +777,7 @@ function useShapeTransform({
             }
             return res;
           }
-          if (mode === 'resize') {
+            if (mode === 'resize') {
             const angleRad = (initial.rotation * Math.PI) / 180;
             const cosA = Math.cos(angleRad);
             const sinA = Math.sin(angleRad);
@@ -791,7 +791,9 @@ function useShapeTransform({
               if (Math.abs(dxLocal) > Math.abs(dyLocal)) newH = newW / ratio;
               else newW = newH * ratio;
             }
-            return { ...s, w: newW, h: newH };
+            const dxCenter = (newW - initial.w) / 2;
+            const dyCenter = (newH - initial.h) / 2;
+            return { ...s, x: initial.x - dxCenter, y: initial.y - dyCenter, w: newW, h: newH };
           }
           if (mode === 'rotate') {
             const centerX = initial.x + initial.w / 2;
@@ -867,12 +869,23 @@ function useShapeTransform({
             return { ...s, pivotU: u, pivotV: v };
           }
           if (mode === 'poly-point') {
-            const newPoints = [...s.points];
-            newPoints[extra] = {
-              x: initial.points[extra].x + dxGlobal,
-              y: initial.points[extra].y + dyGlobal
+            const worldPts = s.points.map((p, i) =>
+              i === extra
+                ? { x: (initial.x + initial.points[extra].x) + dxGlobal, y: (initial.y + initial.points[extra].y) + dyGlobal }
+                : { x: s.x + p.x, y: s.y + p.y }
+            );
+            const xs = worldPts.map(p => p.x);
+            const ys = worldPts.map(p => p.y);
+            const newMinX = Math.min(...xs);
+            const newMinY = Math.min(...ys);
+            return {
+              ...s,
+              x: newMinX,
+              y: newMinY,
+              w: Math.max(Math.max(...xs) - newMinX, 1),
+              h: Math.max(Math.max(...ys) - newMinY, 1),
+              points: worldPts.map(p => ({ x: p.x - newMinX, y: p.y - newMinY }))
             };
-            return { ...s, points: newPoints };
           }
           return s;
         }));
@@ -1013,6 +1026,11 @@ function App() {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [showAddMenu, setShowAddMenu] = useState(false);
     const [dragLayerId, setDragLayerId] = useState<string | null>(null);
+    const swipeStartRef = useRef(0);
+    const swipeOffsetRef = useRef(0);
+    const settingsPanelRef = useRef<HTMLDivElement>(null);
+    const precisionPanelRef = useRef<HTMLDivElement>(null);
+    const layersPanelRef = useRef<HTMLDivElement>(null);
     const {
       stage,
       shapes,
@@ -1313,6 +1331,8 @@ function App() {
     }, [stage.scale]);
 
     const deleteShape = (id) => {
+      const shape = shapes.find(s => s.id === id);
+      if (!shape || !window.confirm(`Delete ${shape.type}?`)) return;
       setShapes(prev => prev.filter(s => s.id !== id));
       if (selectedId === id) setSelectedId(null);
     };
@@ -1379,13 +1399,34 @@ function App() {
       setShapes((prev) => [...prev, clone]);
       setSelectedId(clone.id);
       setActiveTool(TOOLS.SELECT);
+      setShowAddMenu(false);
+      setShowSettings(false);
       setImageQuickMenu({
         shapeId: clone.id,
         control: 'opacity',
         isPrecision: true,
         blinkOpacity: null
       });
-    }, [setShapes, setSelectedId, setActiveTool, setImageQuickMenu, shapesRef]);
+    }, [setShapes, setSelectedId, setActiveTool, setShowAddMenu, setShowSettings, setImageQuickMenu, shapesRef]);
+
+    const duplicateShape = useCallback((shapeId) => {
+      const src = shapesRef.current.find((s) => s.id === shapeId);
+      if (!src) return;
+      const isLine = src.type === SHAPE_TYPES.LINE;
+      const clone = {
+        ...src,
+        id: generateId(),
+        index: shapesRef.current.length + 1,
+        x: src.x + 20,
+        y: src.y + 20,
+        x2: isLine ? (src.x2 ?? src.x) + 20 : src.x2,
+        y2: isLine ? (src.y2 ?? src.y) + 20 : src.y2,
+        isLocked: false
+      };
+      setShapes((prev) => [...prev, clone]);
+      setSelectedId(clone.id);
+      setActiveTool(TOOLS.SELECT);
+    }, [setShapes, setSelectedId, setActiveTool, shapesRef]);
 
     const { handleCanvasTouchStart: handleStageTouchStart, handleCanvasTouchMove, handleCanvasTouchEnd, handleCanvasTouchCancel } = useStageGestures({
       activeToolRef,
@@ -1408,6 +1449,9 @@ function App() {
     });
 
     const handleCanvasTouchStart = useCallback((e) => {
+      if (e.target.closest('button') || e.target.closest('input')) return;
+      setShowAddMenu(false);
+      setImageQuickMenu(null);
       if (activeToolRef.current === TOOLS.POLY_DRAW) {
         handleCanvasMouseDown(e);
         return;
@@ -1417,7 +1461,7 @@ function App() {
         return;
       }
       handleStageTouchStart(e);
-    }, [activeToolRef, handleCanvasMouseDown, handleStageTouchStart, setSelectedId]);
+    }, [activeToolRef, handleCanvasMouseDown, handleStageTouchStart, setSelectedId, setShowAddMenu, setImageQuickMenu]);
 
     const toggleLock = useCallback((id) => {
       updateShapeById(id, (s) => ({ ...s, isLocked: !s.isLocked }));
@@ -1480,6 +1524,8 @@ function App() {
     const openPrecisionMode = useCallback((shapeId: string) => {
       const shape = shapesRef.current.find((s) => s.id === shapeId);
       if (!shape) return;
+      setShowAddMenu(false);
+      setShowSettings(false);
       setSelectedId(shapeId);
       setActiveTool(TOOLS.SELECT);
       setImageQuickMenu({
@@ -1559,27 +1605,31 @@ function App() {
 
     const getShapeIcon = (shape) => {
       if (!shape) return null;
-      const defaultColor = shape.stroke || '#9ca3af';
-      const props = { size: 18, style: { color: defaultColor } };
+      const strokeColor = shape.stroke && shape.stroke !== 'transparent' ? shape.stroke : '#9ca3af';
+      const fillColor = shape.fill && shape.fill !== 'transparent' ? shape.fill : null;
+      const props = { size: 18, style: { color: strokeColor } };
+      const bgStyle = fillColor ? { backgroundColor: fillColor, borderRadius: 'inherit' } : {};
 
+      let icon;
       switch (shape.type) {
-        case 'rect': return <Square {...props} fill={defaultColor} fillOpacity={0.2} />;
-        case 'circle': return <Circle {...props} fill={defaultColor} fillOpacity={0.2} />;
-        case 'triangle': return <Triangle {...props} fill={defaultColor} fillOpacity={0.2} />;
-        case 'line': return <Minus {...props} className="rotate-45" />;
-        case 'poly': return <Pentagon {...props} fill={defaultColor} fillOpacity={0.2} />;
-        case 'image': return (
+        case 'rect': icon = <Square {...props} />; break;
+        case 'circle': icon = <Circle {...props} />; break;
+        case 'triangle': icon = <Triangle {...props} />; break;
+        case 'line': icon = <Minus {...props} className="rotate-45" />; break;
+        case 'poly': icon = <Pentagon {...props} />; break;
+        case 'image': icon = (
           <img
             src={shape.src}
             className="w-full h-full object-cover rounded-[inherit]"
             style={{
-              filter: `hue-rotate(${shape.hue || 0}deg) saturate(${shape.saturation ?? 100}%) brightness(${shape.brightness ?? 100}%) invert(${shape.invert ? 100 : 0}%)`
+              filter: `hue-rotate(${shape.hue || 0}deg) saturate(${shape.saturation ?? 100}%) brightness(${shape.brightness ?? 100}%) contrast(${shape.contrast ?? 100}%) invert(${shape.invert ? 100 : 0}%)`
             }}
             alt="thumb"
           />
-        );
+        ); break;
         default: return null;
       }
+      return <div className="w-full h-full flex items-center justify-center rounded-[inherit]" style={bgStyle}>{icon}</div>;
     };
 
     const getShapeTitle = (shape) => {
@@ -1602,8 +1652,10 @@ function App() {
 
     const openLayersPanel = useCallback(() => {
       setShowLayers(prev => !prev);
+      setShowAddMenu(false);
       setShowSettings(false);
-    }, [setShowLayers, setShowSettings]);
+      setImageQuickMenu(null);
+    }, [setShowLayers, setShowAddMenu, setShowSettings, setImageQuickMenu]);
 
     return (
       <div className="w-full h-screen bg-[#0a0a0a] flex flex-col overflow-hidden text-white touch-none font-sans select-none">
@@ -1614,8 +1666,8 @@ function App() {
           <div className="flex items-center gap-2">
             <div className="relative">
               <button
-                onClick={() => setShowAddMenu((p) => !p)}
-                className="p-2 bg-blue-600 rounded-lg active:scale-90 transition-all border border-blue-400/50 flex items-center gap-1.5"
+                onClick={() => { setShowAddMenu(p => !p); setShowSettings(false); setImageQuickMenu(null); }}
+                className="p-2 bg-blue-600 rounded-lg active:scale-90 transition border border-blue-400/50 flex items-center gap-1.5"
                 title="Add image or shape"
               >
                 <Icon name="add" size={18} />
@@ -1633,12 +1685,13 @@ function App() {
               )}
             </div>
             <div className="flex bg-[#222] rounded-lg p-0.5 border border-white/10">
-              <button onClick={() => { setActiveTool(TOOLS.SELECT); setPolyPoints([]); }} className={`p-2 rounded-md transition-all ${activeTool === TOOLS.SELECT ? 'bg-white/10 text-white' : 'text-gray-500'}`}><MousePointer2 size={18} /></button>
-              <button onClick={() => { setActiveTool(TOOLS.PAN); setPolyPoints([]); }} className={`p-2 rounded-md transition-all ${activeTool === TOOLS.PAN ? 'bg-white/10 text-white' : 'text-gray-500'}`}><Hand size={18} /></button>
+              <button aria-label="Select" onClick={() => { setActiveTool(TOOLS.SELECT); setPolyPoints([]); }} className={`p-2 rounded-md transition ${activeTool === TOOLS.SELECT ? 'bg-white/10 text-white' : 'text-gray-500'}`}><MousePointer2 size={18} /></button>
+              <button aria-label="Pan" onClick={() => { setActiveTool(TOOLS.PAN); setPolyPoints([]); }} className={`p-2 rounded-md transition ${activeTool === TOOLS.PAN ? 'bg-white/10 text-white' : 'text-gray-500'}`}><Hand size={18} /></button>
             </div>
             <button
+              aria-label="Layers"
               onClick={openLayersPanel}
-              className={`p-2 rounded-lg transition-all active:scale-95 border ${showLayers ? 'bg-blue-500 border-blue-500 text-white' : 'bg-[#222] border-white/10 text-gray-500 hover:text-white'}`}
+              className={`p-2 rounded-lg transition active:scale-95 border ${showLayers ? 'bg-blue-500 border-blue-500 text-white' : 'bg-[#222] border-white/10 text-gray-500 hover:text-white'}`}
               title="Layers"
             >
               <Layers size={18} />
@@ -1649,7 +1702,7 @@ function App() {
             {shapes.length > 0 && (
               <button
                 onClick={toggleAllVisibility}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all active:scale-90 ${anyVisible ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-blue-500/20 border-blue-500/30 text-blue-400'}`}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition active:scale-90 ${anyVisible ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-blue-500/20 border-blue-500/30 text-blue-400'}`}
                 title={anyVisible ? "Hide all shapes" : "Show all shapes"}
               >
                 {anyVisible ? <Eye size={18} /> : <EyeOff size={18} />}
@@ -1658,11 +1711,11 @@ function App() {
                 </span>
               </button>
             )}
-            <button onClick={toggleFullscreen} className="p-2 text-gray-500 hover:text-white bg-[#222] rounded-lg transition-all" title="Toggle Fullscreen">
+            <button aria-label="Toggle Fullscreen" onClick={toggleFullscreen} className="p-2 text-gray-500 hover:text-white bg-[#222] rounded-lg transition" title="Toggle Fullscreen">
               {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
             </button>
             {selectedShape && (
-              <button onClick={() => { setShowSettings(!showSettings); setShowLayers(false); }} className={`p-2 rounded-lg transition-all ${showSettings ? 'bg-blue-500 text-white' : 'bg-[#222] text-gray-400'}`}><Settings2 size={20} /></button>
+              <button aria-label="Settings" onClick={() => { setShowSettings(!showSettings); setShowAddMenu(false); setImageQuickMenu(null); setShowLayers(false); }} className={`p-2 rounded-lg transition ${showSettings ? 'bg-blue-500 text-white' : 'bg-[#222] text-gray-400'}`}><Settings2 size={20} /></button>
             )}
           </div>
         </div>
@@ -1790,31 +1843,47 @@ function App() {
           <div className="absolute left-1/2 -translate-x-1/2 bottom-4 z-[112] flex items-center gap-2 bg-blue-600/20 px-3 py-1.5 rounded-full border border-blue-500/30">
             <span className="text-xs font-bold text-blue-400">Shape creation ({polyPoints.length})</span>
             {polyPoints.length >= 2 && (
-              <button onClick={() => finalizePoly(false)} className="bg-blue-500 text-white p-1 rounded-full active:scale-90 transition-all"><Check size={14} /></button>
+              <button aria-label="Finish shape" onClick={() => finalizePoly(false)} className="bg-blue-500 text-white p-1 rounded-full active:scale-90 transition"><Check size={14} /></button>
             )}
-            <button onClick={() => { setActiveTool(TOOLS.SELECT); setPolyPoints([]); }} className="text-gray-400 p-1 hover:text-white"><X size={14} /></button>
+            <button aria-label="Cancel" onClick={() => { setActiveTool(TOOLS.SELECT); setPolyPoints([]); }} className="text-gray-400 p-1 hover:text-white"><X size={14} /></button>
           </div>
         )}
 
         {showLayers && (
           <div
-            className="absolute inset-x-0 bottom-0 bg-[#111]/95 backdrop-blur-xl border-t border-white/10 z-[140] flex flex-col animate-in slide-in-from-bottom duration-200 shadow-2xl pb-[env(safe-area-inset-bottom)]"
-            style={{ maxHeight: `min(70vh, ${Math.max(180, 120 + shapes.length * 62)}px)` }}
+            ref={layersPanelRef}
+            className="absolute inset-x-0 bottom-0 z-[100] flex flex-col"
+            onTouchStart={(e) => {
+              swipeStartRef.current = e.touches[0].clientY;
+              const el = layersPanelRef.current;
+              if (!el) { swipeOffsetRef.current = 0; return; }
+              const m = el.style.transform.match(/translateY\(([\d.]+)px\)/);
+              swipeOffsetRef.current = m ? parseFloat(m[1]) : 0;
+            }}
+            onTouchMove={(e) => {
+              const el = layersPanelRef.current;
+              if (!el) return;
+              const maxY = window.innerHeight * 0.7;
+              const dy = Math.max(0, Math.min(swipeOffsetRef.current + e.touches[0].clientY - swipeStartRef.current, maxY));
+              if (dy > 0) e.preventDefault();
+              el.style.transform = `translateY(${dy}px)`;
+            }}
           >
-            <div className="p-5 border-b border-white/5 flex justify-between items-center bg-[#111]">
-              <div className="flex flex-col">
-                <span className="font-bold text-xs text-blue-500 uppercase tracking-widest">Layers</span>
-                <span className="text-[10px] text-gray-500 mt-1">{shapes.length} objects</span>
+            <div className="bg-[#1a1a1a] rounded-t-3xl border-t border-white/10 shadow-2xl pt-2 px-4 pb-2 shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Layers size={18} className="text-blue-500" />
+                  <span className="text-sm font-bold">Layers</span>
+                  <span className="text-[10px] text-gray-500 font-mono">{shapes.length}</span>
+                </div>
+                <button aria-label="Close layers" onClick={() => setShowLayers(false)} className="text-gray-500 p-2 hover:bg-white/5 rounded-lg active:scale-90 transition"><X size={20} /></button>
               </div>
-
-              <div className="flex items-center gap-1">
-                <button onClick={() => setShowLayers(false)} className="text-gray-500 p-2 hover:bg-white/5 rounded-lg active:scale-90 transition-all"><X size={20} /></button>
-              </div>
+              <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mt-2" />
             </div>
 
-            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            <div className="bg-[#1a1a1a] border-t border-white/5 flex-1 overflow-y-auto p-2 space-y-1 pb-[env(safe-area-inset-bottom)]" style={{ overscrollBehavior: 'contain' }}>
               {shapes.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full opacity-20 text-center px-6">
+                <div className="flex flex-col items-center justify-center h-32 opacity-20 text-center px-6">
                   <Layers size={48} className="mb-4" />
                   <p className="text-sm font-medium">No layers</p>
                 </div>
@@ -1838,7 +1907,7 @@ function App() {
                       moveLayer(dragLayerId, shape.id);
                       setDragLayerId(null);
                     }}
-                    className={`flex items-center gap-1.5 p-1.5 rounded-xl transition-all cursor-pointer border ${selectedId === shape.id ? 'bg-blue-600/15 border-blue-500/40' : 'hover:bg-white/5 border-transparent'}`}
+                    className={`flex items-center gap-1.5 p-1.5 rounded-xl transition cursor-pointer border ${selectedId === shape.id ? 'bg-blue-600/15 border-blue-500/40' : 'hover:bg-white/5 border-transparent'}`}
                   >
                     <div className="w-8 flex justify-center shrink-0">
                       <span
@@ -1853,12 +1922,14 @@ function App() {
                         {shape.index}
                       </span>
                     </div>
-                    <label className={`w-10 h-10 flex items-center justify-center shrink-0 rounded-lg border border-white/5 transition-opacity cursor-pointer relative overflow-hidden ${shape.isVisible ? 'opacity-100 bg-white/5' : 'opacity-30'}`}>
+                    <label className={`w-10 h-10 flex items-center justify-center shrink-0 rounded-lg border border-white/5 transition-opacity cursor-pointer relative overflow-hidden ${shape.isVisible ? 'opacity-100' : 'opacity-30'}`}>
                       {getShapeIcon(shape)}
                     </label>
-                    <button onClick={(e) => { e.stopPropagation(); toggleVisibility(shape.id); }} className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all active:scale-90 ${shape.isVisible ? 'text-blue-400 bg-blue-500/10' : 'text-gray-700 bg-white/5'}`}>{shape.isVisible ? <Eye size={18} /> : <EyeOff size={18} />}</button>
-                    <button onClick={(e) => { e.stopPropagation(); toggleLock(shape.id); }} className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all active:scale-90 ${shape.isLocked ? 'text-orange-500 bg-orange-500/15' : 'text-gray-700 bg-white/5'}`}><Lock size={18} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); deleteShape(shape.id); }} className="ml-auto w-10 h-10 flex items-center justify-center text-gray-700 hover:text-red-500 hover:bg-red-500/15 rounded-lg transition-all active:scale-90"><Trash2 size={18} /></button>
+                    <div className="flex gap-1 ml-auto">
+                      <button aria-label="Toggle visibility" onClick={(e) => { e.stopPropagation(); toggleVisibility(shape.id); }} className={`w-10 h-10 flex items-center justify-center rounded-lg transition active:scale-90 ${shape.isVisible ? 'text-blue-400 bg-blue-500/10' : 'text-gray-700 bg-white/5'}`}>{shape.isVisible ? <Eye size={18} /> : <EyeOff size={18} />}</button>
+                      <button aria-label="Toggle lock" onClick={(e) => { e.stopPropagation(); toggleLock(shape.id); }} className={`w-10 h-10 flex items-center justify-center rounded-lg transition active:scale-90 ${shape.isLocked ? 'text-orange-500 bg-orange-500/15' : 'text-gray-700 bg-white/5'}`}><Lock size={18} /></button>
+                      <button aria-label="Delete shape" onClick={(e) => { e.stopPropagation(); deleteShape(shape.id); }} className="w-10 h-10 flex items-center justify-center text-gray-700 hover:text-red-500 hover:bg-red-500/15 rounded-lg transition active:scale-90"><Trash2 size={18} /></button>
+                    </div>
                   </div>
                 ))
               )}
@@ -1868,355 +1939,363 @@ function App() {
 
         {selectedShape && showSettings && (
           <div
-            className="absolute inset-x-0 bottom-0 bg-[#1a1a1a] rounded-t-3xl border-t border-white/10 z-[100] pt-4 px-6 animate-in slide-in-from-bottom duration-200 shadow-2xl overflow-y-auto max-h-[85vh]"
-            style={{ paddingBottom: 'calc(2.5rem + env(safe-area-inset-bottom))' }}
+            ref={settingsPanelRef}
+            className="absolute inset-x-0 bottom-0 z-[115]"
+            onTouchStart={(e) => {
+              swipeStartRef.current = e.touches[0].clientY;
+              const el = settingsPanelRef.current;
+              if (!el) { swipeOffsetRef.current = 0; return; }
+              const m = el.style.transform.match(/translateY\(([\d.]+)px\)/);
+              swipeOffsetRef.current = m ? parseFloat(m[1]) : 0;
+            }}
+            onTouchMove={(e) => {
+              const el = settingsPanelRef.current;
+              if (!el) return;
+              const maxY = window.innerHeight * 0.7;
+              const dy = Math.max(0, Math.min(swipeOffsetRef.current + e.touches[0].clientY - swipeStartRef.current, maxY));
+              if (dy > 0) e.preventDefault();
+              el.style.transform = `translateY(${dy}px)`;
+            }}
           >
-            <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mb-6 shrink-0 cursor-pointer" onClick={() => setShowSettings(false)} />
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-blue-500/20 rounded-xl flex items-center justify-center text-blue-500 overflow-hidden">
-                  {getShapeIcon(selectedShape)}
+            <div className="bg-[#1a1a1a] rounded-t-3xl border-t border-white/10 shadow-2xl pt-2 px-4 pb-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center overflow-hidden shrink-0">
+                    {getShapeIcon(selectedShape)}
+                  </div>
+                  <span className="text-sm font-bold truncate">#{selectedShape.index}</span>
                 </div>
-                <h3 className="text-sm font-bold">Properties #{selectedShape.index}</h3>
+                <div className="flex items-center gap-1">
+                  {selectedShape.type === 'line' ? (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); updateSelectedShape(s => ({ ...s, keepLength: !s.keepLength })); }}
+                        className={`p-2 rounded-lg transition ${selectedShape.keepLength ? 'text-amber-400 bg-amber-500/15' : 'text-gray-600'}`}
+                        title="Keep length" aria-label="Toggle keep length"
+                      ><Icon name="straighten" size={16} /></button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); duplicateShape(selectedId); }}
+                        className="p-2 rounded-lg text-blue-400 hover:bg-blue-500/15 transition"
+                        title="Duplicate" aria-label="Duplicate"
+                      ><Icon name="content_copy" size={16} /></button>
+                    </>
+                  ) : selectedShape.type !== 'image' ? (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); updateSelectedShape(s => ({ ...s, keepProportions: !(s.keepProportions ?? true) })); }}
+                        className={`p-2 rounded-lg transition ${(selectedShape.keepProportions ?? true) ? 'text-emerald-400 bg-emerald-500/15' : 'text-gray-600'}`}
+                        title="Keep proportions" aria-label="Toggle keep proportions"
+                      ><Icon name="link" size={16} /></button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); duplicateShape(selectedId); }}
+                        className="p-2 rounded-lg text-blue-400 hover:bg-blue-500/15 transition"
+                        title="Duplicate" aria-label="Duplicate"
+                      ><Icon name="content_copy" size={16} /></button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); duplicateShape(selectedId); }}
+                      className="p-2 rounded-lg text-blue-400 hover:bg-blue-500/15 transition"
+                      title="Duplicate" aria-label="Duplicate"
+                    ><Icon name="content_copy" size={16} /></button>
+                  )}
+                  <button
+                    aria-label={selectedShape.isLocked ? "Unlock" : "Lock"}
+                    onClick={(e) => { e.stopPropagation(); toggleLock(selectedId); }}
+                    className={`p-2 rounded-lg transition ${selectedShape.isLocked ? 'text-orange-500 bg-orange-500/15' : 'text-gray-400 hover:text-white'}`}
+                  >{selectedShape.isLocked ? <Lock size={18} /> : <Unlock size={18} />}</button>
+                </div>
               </div>
-              <button onClick={() => setShowSettings(false)} className="p-2 text-gray-500 hover:text-white bg-white/5 rounded-full transition-all"><X size={18} /></button>
+              <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mt-2" />
             </div>
 
-            <div className="flex flex-col gap-6">
-              {selectedShape.type === 'line' && (
-                <div className="bg-white/5 p-4 rounded-2xl space-y-4">
-                  <div className="flex items-center gap-3 mb-1">
-                    <Hash size={18} className="text-blue-500" />
-                    <span className="text-sm font-medium">Divisions count ({selectedShape.divisions + 1})</span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span className="text-xs text-gray-500 font-mono w-4">1</span>
-                    <input type="range" min="1" max="6" step="1" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.divisions || 1} onChange={e => updateSelectedShape(s => ({ ...s, divisions: Number(e.target.value) }))} onClick={e => e.stopPropagation()} />
-                    <span className="text-xs text-gray-500 font-mono w-4">6</span>
-                  </div>
-                </div>
-              )}
+            <div className="bg-[#1a1a1a] border-t border-white/5 px-4 pt-3 pb-4 overflow-y-auto" style={{ maxHeight: 'calc(85vh - 64px)', overscrollBehavior: 'contain' }}>
+              <div className="flex flex-col gap-4 pb-[env(safe-area-inset-bottom)]">
 
-              {/* Filters block for images */}
-              {selectedShape.type === 'image' && (
-                <div className="bg-white/5 p-4 rounded-2xl space-y-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium">Color correction</span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        updateSelectedShape(s => ({ ...s, invert: !s.invert }));
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${selectedShape.invert ? 'bg-white text-black' : 'bg-[#222] text-gray-300 hover:bg-[#333]'}`}
-                    >
-                      Invert
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <Palette size={16} className="text-gray-500" />
-                    <div className="flex-1">
-                      <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Hue</span><span>{selectedShape.hue || 0}В°</span></div>
-                      <input type="range" min="0" max="360" value={selectedShape.hue || 0} onChange={e => updateSelectedShape(s => ({ ...s, hue: Number(e.target.value) }))} className="w-full h-1.5 rounded-lg appearance-none" style={{ background: 'linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)' }} />
+                {selectedShape.type === 'line' && (
+                  <div className="bg-white/5 p-3 rounded-xl space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Hash size={16} className="text-blue-500" />
+                      <span className="text-xs font-medium">Divisions ({selectedShape.divisions + 1})</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] text-gray-500 font-mono">1</span>
+                      <input type="range" min="1" max="6" step="1" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.divisions || 1} onChange={e => updateSelectedShape(s => ({ ...s, divisions: Number(e.target.value) }))} onClick={e => e.stopPropagation()} />
+                      <span className="text-[10px] text-gray-500 font-mono">6</span>
                     </div>
                   </div>
+                )}
 
-                  <div className="flex items-center gap-3">
-                    <Droplets size={16} className="text-gray-500" />
-                    <div className="flex-1">
-                      <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Saturation</span><span>{selectedShape.saturation ?? 100}%</span></div>
-                      <input type="range" min="0" max="200" value={selectedShape.saturation ?? 100} onChange={e => updateSelectedShape(s => ({ ...s, saturation: Number(e.target.value) }))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                {selectedShape.type === 'image' && (
+                  <div className="bg-white/5 p-3 rounded-xl space-y-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium">Color correction</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); updateSelectedShape(s => ({ ...s, invert: !s.invert })); }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${selectedShape.invert ? 'bg-white text-black' : 'bg-[#222] text-gray-300 hover:bg-[#333]'}`}
+                      >Invert</button>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Palette size={16} className="text-gray-500" />
+                      <div className="flex-1">
+                        <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Hue</span><span>{selectedShape.hue || 0}&deg;</span></div>
+                        <input type="range" min="0" max="360" value={selectedShape.hue || 0} onChange={e => updateSelectedShape(s => ({ ...s, hue: Number(e.target.value) }))} className="w-full h-1.5 rounded-lg appearance-none" style={{ background: 'linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)' }} />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Droplets size={16} className="text-gray-500" />
+                      <div className="flex-1">
+                        <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Saturation</span><span>{selectedShape.saturation ?? 100}%</span></div>
+                        <input type="range" min="0" max="200" value={selectedShape.saturation ?? 100} onChange={e => updateSelectedShape(s => ({ ...s, saturation: Number(e.target.value) }))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Sun size={16} className="text-gray-500" />
+                      <div className="flex-1">
+                        <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Brightness</span><span>{selectedShape.brightness ?? 100}%</span></div>
+                        <input type="range" min="0" max="200" value={selectedShape.brightness ?? 100} onChange={e => updateSelectedShape(s => ({ ...s, brightness: Number(e.target.value) }))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Contrast size={16} className="text-gray-500" />
+                      <div className="flex-1">
+                        <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Contrast</span><span>{selectedShape.contrast ?? 100}%</span></div>
+                        <input type="range" min="0" max="200" value={selectedShape.contrast ?? 100} onChange={e => updateSelectedShape(s => ({ ...s, contrast: Number(e.target.value) }))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                      </div>
                     </div>
                   </div>
+                )}
 
-                  <div className="flex items-center gap-3">
-                    <Sun size={16} className="text-gray-500" />
-                    <div className="flex-1">
-                      <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Brightness</span><span>{selectedShape.brightness ?? 100}%</span></div>
-                      <input type="range" min="0" max="200" value={selectedShape.brightness ?? 100} onChange={e => updateSelectedShape(s => ({ ...s, brightness: Number(e.target.value) }))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <Contrast size={16} className="text-gray-500" />
-                    <div className="flex-1">
-                      <div className="flex justify-between text-[10px] text-gray-500 mb-1"><span>Contrast</span><span>{selectedShape.contrast ?? 100}%</span></div>
-                      <input type="range" min="0" max="200" value={selectedShape.contrast ?? 100} onChange={e => updateSelectedShape(s => ({ ...s, contrast: Number(e.target.value) }))} className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Show color picker for non-image shapes */}
                 {selectedShape.type !== 'image' && (
-                  <div className="bg-white/5 p-4 rounded-2xl space-y-4 md:col-span-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <PenTool size={16} className="text-gray-400" />
-                        <span className="text-xs text-gray-300">Stroke</span>
+                  <div className="bg-white/5 p-3 rounded-xl space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); updateSelectedStroke(selectedShape.stroke === 'transparent' ? '#3b82f6' : 'transparent'); }}
+                            className={`p-1.5 rounded-lg transition ${selectedShape.stroke === 'transparent' ? 'text-gray-600 bg-white/5' : 'text-blue-400 bg-blue-500/15'}`}
+                            aria-label="Toggle stroke"
+                          ><PenTool size={16} /></button>
+                          <span className="text-[10px] text-gray-500 font-medium">Stroke</span>
+                        </div>
+                        <input type="color" className="w-7 h-7 bg-transparent border-0 cursor-pointer" value={selectedShape.stroke === 'transparent' ? '#ffffff' : selectedShape.stroke} onChange={e => updateSelectedStroke(e.target.value)} onClick={e => e.stopPropagation()} title="Custom stroke color" />
                       </div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="color"
-                          className="w-8 h-8 bg-transparent border-0 cursor-pointer"
-                          value={selectedShape.stroke === 'transparent' ? '#ffffff' : selectedShape.stroke}
-                          onChange={e => updateSelectedStroke(e.target.value)}
-                          onClick={e => e.stopPropagation()}
-                          title="Custom stroke color"
-                        />
-                        <button
-                          onClick={(e) => { e.stopPropagation(); updateSelectedStroke('transparent'); }}
-                          className={`px-2 py-1 text-[10px] rounded-md border transition-colors ${selectedShape.stroke === 'transparent' ? 'bg-blue-500/20 border-blue-400/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'}`}
-                        >
-                          None
-                        </button>
+                      <div className="flex flex-wrap gap-1.5">
+                        {COLOR_PRESETS.map((color) => (
+                          <button key={`s-${color}`} onClick={(e) => { e.stopPropagation(); updateSelectedStroke(color); }} className={`w-6 h-6 rounded-full border-2 transition-transform active:scale-90 ${selectedShape.stroke === color ? 'border-white scale-110' : 'border-white/20'}`} style={{ backgroundColor: color }} title={color} />
+                        ))}
                       </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {COLOR_PRESETS.map((color) => (
-                        <button
-                          key={`stroke-${color}`}
-                          onClick={(e) => { e.stopPropagation(); updateSelectedStroke(color); }}
-                          className={`w-7 h-7 rounded-full border-2 transition-transform active:scale-90 ${selectedShape.stroke === color ? 'border-white scale-105' : 'border-white/20'}`}
-                          style={{ backgroundColor: color }}
-                          title={`Stroke ${color}`}
-                        />
-                      ))}
                     </div>
 
                     {supportsFill && (
-                      <>
-                        <div className="h-px bg-white/10" />
-                        <div className="flex items-center justify-between">
+                      <div className="border-t border-white/5 pt-3">
+                        <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
-                            <Droplets size={16} className="text-gray-400" />
-                            <span className="text-xs text-gray-300">Fill</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="color"
-                              className="w-8 h-8 bg-transparent border-0 cursor-pointer"
-                              value={selectedShape.fill === 'transparent' ? '#ffffff' : selectedShape.fill}
-                              onChange={e => updateSelectedFill(e.target.value)}
-                              onClick={e => e.stopPropagation()}
-                              title="Custom fill color"
-                            />
                             <button
-                              onClick={(e) => { e.stopPropagation(); updateSelectedFill('transparent'); }}
-                              className={`px-2 py-1 text-[10px] rounded-md border transition-colors ${selectedShape.fill === 'transparent' ? 'bg-blue-500/20 border-blue-400/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'}`}
-                            >
-                              None
-                            </button>
+                              onClick={(e) => { e.stopPropagation(); updateSelectedFill(selectedShape.fill === 'transparent' ? '#3b82f6' : 'transparent'); }}
+                              className={`p-1.5 rounded-lg transition ${selectedShape.fill === 'transparent' ? 'text-gray-600 bg-white/5' : 'text-sky-400 bg-sky-500/15'}`}
+                              aria-label="Toggle fill"
+                            ><Droplets size={16} /></button>
+                            <span className="text-[10px] text-gray-500 font-medium">Fill</span>
                           </div>
+                          <input type="color" className="w-7 h-7 bg-transparent border-0 cursor-pointer" value={selectedShape.fill === 'transparent' ? '#ffffff' : selectedShape.fill} onChange={e => updateSelectedFill(e.target.value)} onClick={e => e.stopPropagation()} title="Custom fill color" />
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap gap-1.5">
                           {COLOR_PRESETS.map((color) => (
-                            <button
-                              key={`fill-${color}`}
-                              onClick={(e) => { e.stopPropagation(); updateSelectedFill(color); }}
-                              className={`w-7 h-7 rounded-full border-2 transition-transform active:scale-90 ${selectedShape.fill === color ? 'border-white scale-105' : 'border-white/20'}`}
-                              style={{ backgroundColor: color }}
-                              title={`Fill ${color}`}
-                            />
+                            <button key={`f-${color}`} onClick={(e) => { e.stopPropagation(); updateSelectedFill(color); }} className={`w-6 h-6 rounded-full border-2 transition-transform active:scale-90 ${selectedShape.fill === color ? 'border-white scale-110' : 'border-white/20'}`} style={{ backgroundColor: color }} title={color} />
                           ))}
                         </div>
-                      </>
+                      </div>
                     )}
 
-                    <div className="h-px bg-white/10" />
-                    <div className="flex items-center gap-3">
-                      <Type size={16} className="text-gray-500" />
-                      <span className="text-[10px] text-gray-500 w-12">Opacity</span>
-                      <input type="range" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.opacity} onChange={e => updateSelectedShape(s => ({ ...s, opacity: Number(e.target.value) }))} onClick={e => e.stopPropagation()} />
+                    <div className="border-t border-white/5 pt-3">
+                      <div className="flex items-center gap-3">
+                        <Type size={16} className="text-gray-500" />
+                        <input type="range" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" min="0" max="100" value={selectedShape.opacity} onChange={e => updateSelectedShape(s => ({ ...s, opacity: Number(e.target.value) }))} onClick={e => e.stopPropagation()} />
+                        <span className="text-[10px] font-mono text-gray-400 w-8 text-right">{selectedShape.opacity}%</span>
+                      </div>
                     </div>
                   </div>
                 )}
 
-                {/* Show only opacity control for images */}
                 {selectedShape.type === 'image' && (
-                  <div className="flex items-center justify-between gap-4 bg-white/5 p-2 rounded-2xl">
-                    <div className="flex-1 flex items-center gap-3 px-3">
-                      <Type size={18} className="text-gray-500" />
-                      <span className="text-[10px] text-gray-500">Opacity</span>
-                      <input type="range" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.opacity} onChange={e => updateSelectedShape(s => ({ ...s, opacity: Number(e.target.value) }))} onClick={e => e.stopPropagation()} />
-                    </div>
+                  <div className="flex items-center gap-3 bg-white/5 p-3 rounded-xl">
+                    <Type size={16} className="text-gray-500" />
+                    <input type="range" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" min="0" max="100" value={selectedShape.opacity} onChange={e => updateSelectedShape(s => ({ ...s, opacity: Number(e.target.value) }))} onClick={e => e.stopPropagation()} />
+                    <span className="text-[10px] font-mono text-gray-400 w-8 text-right">{selectedShape.opacity}%</span>
                   </div>
                 )}
 
-                {/* Stroke width is not used for images */}
                 {selectedShape.type !== 'image' && (
-                  <div className="flex items-center justify-between gap-4 bg-white/5 p-2 rounded-2xl">
-                    <div className="flex-1 flex items-center gap-3 px-4">
-                      <PenTool size={18} className="text-gray-500 shrink-0" />
-                      <input type="range" min="1" max="20" step="1" className="w-full h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.strokeWidth} onChange={e => updateSelectedShape(s => ({ ...s, strokeWidth: Number(e.target.value) }))} onClick={e => e.stopPropagation()} />
-                    </div>
+                  <div className="flex items-center gap-3 bg-white/5 p-3 rounded-xl">
+                    <PenTool size={16} className="text-gray-500 shrink-0" />
+                    <input type="range" min="1" max="20" step="1" className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none accent-blue-500" value={selectedShape.strokeWidth} onChange={e => updateSelectedShape(s => ({ ...s, strokeWidth: Number(e.target.value) }))} onClick={e => e.stopPropagation()} />
+                    <span className="text-[10px] font-mono text-gray-400 w-6 text-right">{selectedShape.strokeWidth}</span>
                   </div>
                 )}
-              </div>
 
-              <div className="flex gap-3">
-                <button onClick={(e) => { e.stopPropagation(); toggleLock(selectedId); }} className={`flex-1 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all active:scale-95 ${selectedShape.isLocked ? 'bg-orange-500/20 text-orange-500 border border-orange-500/30' : 'bg-white/5 text-gray-400'}`}>
-                  {selectedShape.isLocked ? <Lock size={18} /> : <Unlock size={18} />}
-                  <span className="text-sm">{selectedShape.isLocked ? 'Locked' : 'Unlocked'}</span>
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); deleteShape(selectedId); }} className="p-4 bg-red-500/10 text-red-500 rounded-2xl active:bg-red-500/20 transition-all border border-red-500/10"><Trash2 size={22} /></button>
+                <div className="flex gap-3 pt-2">
+                  <button onClick={() => setShowSettings(false)} className="flex-1 py-3 rounded-xl bg-white/5 text-gray-400 font-bold text-sm transition active:scale-95 hover:bg-white/10">Close</button>
+                  <button aria-label="Delete shape" onClick={(e) => { e.stopPropagation(); deleteShape(selectedId); }} className="p-3 bg-red-500/10 text-red-500 rounded-xl active:bg-red-500/20 transition border border-red-500/10"><Trash2 size={22} /></button>
+                </div>
               </div>
             </div>
           </div>
         )}
 
                 {isPrecisionOpen && quickImageTarget && (
-          <div className="absolute inset-x-0 bottom-0 z-[115] bg-[#14161b]/95 border-t border-white/10 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))]">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden">{getShapeIcon(quickImageTarget)}</div>
-                <div className="leading-tight">
-                  <div className="text-xs text-gray-300 font-semibold">{getShapeTitle(quickImageTarget)}</div>
-                  <div className="text-[10px] text-gray-500">{quickImageTarget.stroke || quickImageTarget.fill || 'No color'}</div>
+          <div
+            ref={precisionPanelRef}
+            className="absolute inset-x-0 bottom-0 z-[100]"
+            onTouchStart={(e) => {
+              swipeStartRef.current = e.touches[0].clientY;
+              const el = precisionPanelRef.current;
+              if (!el) { swipeOffsetRef.current = 0; return; }
+              const m = el.style.transform.match(/translateY\(([\d.]+)px\)/);
+              swipeOffsetRef.current = m ? parseFloat(m[1]) : 0;
+            }}
+            onTouchMove={(e) => {
+              const el = precisionPanelRef.current;
+              if (!el) return;
+              const maxY = window.innerHeight * 0.7;
+              const dy = Math.max(0, Math.min(swipeOffsetRef.current + e.touches[0].clientY - swipeStartRef.current, maxY));
+              if (dy > 0) e.preventDefault();
+              el.style.transform = `translateY(${dy}px)`;
+            }}
+          >
+            <div className="bg-[#14161b] rounded-t-3xl border-t border-white/10 shadow-2xl pt-2 px-4 pb-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden shrink-0">{getShapeIcon(quickImageTarget)}</div>
+                  <div className="leading-tight min-w-0">
+                    <div className="text-xs font-semibold truncate">{getShapeTitle(quickImageTarget)}</div>
+                    <div className="text-[10px] text-gray-500 truncate">{quickImageTarget.stroke || quickImageTarget.fill || 'No color'}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  {isPrecisionShape && quickImageTarget.type === 'line' ? (
+                    <>
+                      <button onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, keepLength: !s.keepLength }))} className={`p-2 rounded-lg transition ${quickImageTarget.keepLength ? 'text-amber-400 bg-amber-500/15' : 'text-gray-600'}`} title="Keep length" aria-label="Toggle keep length"><Icon name="straighten" size={16} /></button>
+                      <button onClick={() => duplicateShape(quickImageTarget.id)} className="p-2 rounded-lg text-blue-400 hover:bg-blue-500/15 transition" title="Duplicate" aria-label="Duplicate"><Icon name="content_copy" size={16} /></button>
+                    </>
+                  ) : isPrecisionShape ? (
+                    <>
+                      <button onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, keepProportions: !(s.keepProportions ?? true) }))} className={`p-2 rounded-lg transition ${(quickImageTarget.keepProportions ?? true) ? 'text-emerald-400 bg-emerald-500/15' : 'text-gray-600'}`} title="Keep proportions" aria-label="Toggle keep proportions"><Icon name="link" size={16} /></button>
+                      <button onClick={() => duplicateShape(quickImageTarget.id)} className="p-2 rounded-lg text-blue-400 hover:bg-blue-500/15 transition" title="Duplicate" aria-label="Duplicate"><Icon name="content_copy" size={16} /></button>
+                    </>
+                  ) : null}
+                  <button
+                    aria-label={quickImageTarget.isLocked ? "Unlock" : "Lock"}
+                    onClick={() => toggleLock(quickImageTarget.id)}
+                    className={`p-2 rounded-lg transition ${quickImageTarget.isLocked ? 'text-orange-500 bg-orange-500/15' : 'text-gray-400 hover:text-white'}`}
+                  >{quickImageTarget.isLocked ? <Lock size={18} /> : <Unlock size={18} />}</button>
                 </div>
               </div>
-              <button onClick={() => setImageQuickMenu(null)} className="p-1.5 rounded-md border border-white/10 bg-white/5 text-gray-300"><X size={14} /></button>
+              <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mt-2" />
             </div>
 
-            {isPrecisionImage && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 overflow-x-auto">
-                  {['hue', 'saturation', 'lightness', 'contrast', 'transparency'].map((key) => (
-                    <button
-                      key={key}
-                      onClick={() => setImageQuickMenu(prev => prev ? { ...prev, control: key } : prev)}
-                      className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${imageQuickMenu?.control === key ? 'bg-blue-500/20 border-blue-400/60 text-blue-300' : 'bg-white/5 border-white/10 text-gray-400'}`}
-                    >
-                      {{ hue: 'H', saturation: 'S', lightness: 'L', contrast: 'C', transparency: 'Tr' }[key]}
-                    </button>
-                  ))}
-                  <button onClick={toggleImageBlink} className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${(imageQuickMenu?.blinkOpacity ?? null) === null ? 'bg-white/5 border-white/10 text-gray-300' : 'bg-cyan-500/20 border-cyan-400/50 text-cyan-300'}`}><Eye size={14} /></button>
-                  <button
-                    onClick={() => toggleLock(quickImageTarget.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${quickImageTarget.isLocked ? 'bg-orange-500/20 border-orange-400/50 text-orange-300' : 'bg-white/5 border-white/10 text-gray-300'}`}
-                  >
-                    {quickImageTarget.isLocked ? <Lock size={14} /> : <Unlock size={14} />}
-                  </button>
-                </div>
-                {(() => {
-                  const cfg = getQuickControlConfig(imageQuickMenu?.control || 'hue', quickImageTarget);
-                  if (!cfg) return null;
-                  return (
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[11px] text-gray-400">
-                        <span>{cfg.label}</span>
-                        <span className="font-mono text-blue-300">{Math.round(cfg.value)}{cfg.suffix}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={cfg.min}
-                        max={cfg.max}
-                        value={cfg.value}
-                        onChange={(e) => applyQuickImageValue(imageQuickMenu?.control || 'hue', Number(e.target.value))}
-                        className="w-full h-2 bg-white/10 rounded-lg appearance-none accent-blue-500"
-                      />
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
+            <div className="bg-[#14161b] border-t border-white/5 px-4 pt-3 pb-4 overflow-y-auto" style={{ maxHeight: 'calc(85vh - 64px)', overscrollBehavior: 'contain' }}>
+              <div className="flex flex-col gap-4 pb-[env(safe-area-inset-bottom)]">
 
-            {isPrecisionShape && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[10px] text-gray-500">Stroke</span>
-                  {COLOR_GROUPS.map((group, idx) => (
-                    <button
-                      key={`stroke-group-${idx}`}
-                      onClick={() => cycleStrokePreset(quickImageTarget.id, idx)}
-                      className="w-7 h-7 rounded-full border-2 border-white/20"
-                      style={{ backgroundColor: group[0] }}
-                    />
-                  ))}
-                  <button onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, stroke: 'transparent' }))} className="w-7 h-7 rounded-full border border-white/30 bg-white/5 text-gray-300 text-[10px] leading-none">/</button>
-
-                  {quickImageTarget.type !== 'line' && (
-                    <>
-                      <span className="ml-2 text-[10px] text-gray-500">Fill</span>
-                      {COLOR_GROUPS.map((group, idx) => (
+                {isPrecisionImage && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 overflow-x-auto">
+                      {['hue', 'saturation', 'lightness', 'contrast', 'transparency'].map((key) => (
                         <button
-                          key={`fill-group-${idx}`}
-                          onClick={() => cycleFillPreset(quickImageTarget.id, idx)}
-                          className="w-7 h-7 rounded-full border-2 border-white/20"
-                          style={{ backgroundColor: group[0] }}
-                        />
+                          key={key}
+                          onClick={() => setImageQuickMenu(prev => prev ? { ...prev, control: key } : prev)}
+                          className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${imageQuickMenu?.control === key ? 'bg-blue-500/20 border-blue-400/60 text-blue-300' : 'bg-white/5 border-white/10 text-gray-400'}`}
+                        >
+                          {{ hue: 'H', saturation: 'S', lightness: 'L', contrast: 'C', transparency: 'Tr' }[key]}
+                        </button>
                       ))}
-                      <button onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, fill: 'transparent' }))} className="w-7 h-7 rounded-full border border-white/30 bg-white/5 text-gray-300 text-[10px] leading-none">/</button>
-                    </>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    onClick={() => toggleLock(quickImageTarget.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs border ${quickImageTarget.isLocked ? 'bg-orange-500/20 border-orange-400/50 text-orange-300' : 'bg-white/5 border-white/10 text-gray-300'}`}
-                  >
-                    {quickImageTarget.isLocked ? <Lock size={14} /> : <Unlock size={14} />}
-                  </button>
-                  <button
-                    onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, keepProportions: !(s.keepProportions ?? true) }))}
-                    className={`px-3 py-1.5 rounded-lg text-xs border ${(quickImageTarget.keepProportions ?? true) ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300' : 'bg-white/5 border-white/10 text-gray-300'}`}
-                  >
-                    Keep proportions
-                  </button>
-                  {quickImageTarget.type === 'line' && (
-                    <>
-                      <button
-                        onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, keepLength: !s.keepLength }))}
-                        className={`px-3 py-1.5 rounded-lg text-xs border ${quickImageTarget.keepLength ? 'bg-amber-500/20 border-amber-400/50 text-amber-300' : 'bg-white/5 border-white/10 text-gray-300'}`}
-                      >
-                        Keep length
-                      </button>
-                      <button
-                        onClick={() => copyLineFromShape(quickImageTarget.id)}
-                        className="px-3 py-1.5 rounded-lg text-xs border bg-blue-500/20 border-blue-400/50 text-blue-300"
-                      >
-                        Copy
-                      </button>
-                    </>
-                  )}
-                </div>
-
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[11px] text-gray-400">
-                    <span>Opacity</span>
-                    <span className="font-mono text-blue-300">{Math.round(quickImageTarget.opacity ?? 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={quickImageTarget.opacity ?? 100}
-                    onChange={(e) => updateShapeById(quickImageTarget.id, (s) => ({ ...s, opacity: Number(e.target.value) }))}
-                    className="w-full h-2 bg-white/10 rounded-lg appearance-none accent-blue-500"
-                  />
-                </div>
-
-                {quickImageTarget.type === 'line' && (
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[11px] text-gray-400">
-                      <span>Division count</span>
-                      <span className="font-mono text-blue-300">{(quickImageTarget.divisions || 1) + 1}</span>
+                      <button onClick={toggleImageBlink} className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${(imageQuickMenu?.blinkOpacity ?? null) === null ? 'bg-white/5 border-white/10 text-gray-300' : 'bg-cyan-500/20 border-cyan-400/50 text-cyan-300'}`}><Eye size={14} /></button>
                     </div>
-                    <input
-                      type="range"
-                      min={1}
-                      max={6}
-                      step={1}
-                      value={quickImageTarget.divisions || 1}
-                      onChange={(e) => updateShapeById(quickImageTarget.id, (s) => ({ ...s, divisions: Number(e.target.value) }))}
-                      className="w-full h-2 bg-white/10 rounded-lg appearance-none accent-blue-500"
-                    />
+                    {(() => {
+                      const cfg = getQuickControlConfig(imageQuickMenu?.control || 'hue', quickImageTarget);
+                      if (!cfg) return null;
+                      return (
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-[11px] text-gray-400">
+                            <span>{cfg.label}</span>
+                            <span className="font-mono text-blue-300">{Math.round(cfg.value)}{cfg.suffix}</span>
+                          </div>
+                          <input type="range" min={cfg.min} max={cfg.max} value={cfg.value} onChange={(e) => applyQuickImageValue(imageQuickMenu?.control || 'hue', Number(e.target.value))} className="w-full h-2 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
+
+                {isPrecisionShape && (
+                  <div className="bg-white/5 p-3 rounded-xl space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, stroke: s.stroke === 'transparent' ? '#3b82f6' : 'transparent' }))}
+                            className={`p-1.5 rounded-lg transition ${quickImageTarget.stroke === 'transparent' ? 'text-gray-600 bg-white/5' : 'text-blue-400 bg-blue-500/15'}`}
+                            aria-label="Toggle stroke"
+                          ><PenTool size={16} /></button>
+                          <span className="text-[10px] text-gray-500 font-medium">Stroke</span>
+                        </div>
+                        <input type="color" className="w-7 h-7 bg-transparent border-0 cursor-pointer" value={quickImageTarget.stroke === 'transparent' ? '#ffffff' : quickImageTarget.stroke} onChange={(e) => updateShapeById(quickImageTarget.id, (s) => ({ ...s, stroke: e.target.value }))} title="Custom stroke color" />
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {COLOR_PRESETS.map((color) => (
+                          <button key={`ps-${color}`} onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, stroke: color }))} className={`w-6 h-6 rounded-full border-2 transition-transform active:scale-90 ${quickImageTarget.stroke === color ? 'border-white scale-110' : 'border-white/20'}`} style={{ backgroundColor: color }} title={color} />
+                        ))}
+                      </div>
+                    </div>
+
+                    {quickImageTarget.type !== 'line' && (
+                      <div className="border-t border-white/5 pt-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, fill: s.fill === 'transparent' ? '#3b82f6' : 'transparent' }))}
+                              className={`p-1.5 rounded-lg transition ${quickImageTarget.fill === 'transparent' ? 'text-gray-600 bg-white/5' : 'text-sky-400 bg-sky-500/15'}`}
+                              aria-label="Toggle fill"
+                            ><Droplets size={16} /></button>
+                            <span className="text-[10px] text-gray-500 font-medium">Fill</span>
+                          </div>
+                          <input type="color" className="w-7 h-7 bg-transparent border-0 cursor-pointer" value={quickImageTarget.fill === 'transparent' ? '#ffffff' : quickImageTarget.fill} onChange={(e) => updateShapeById(quickImageTarget.id, (s) => ({ ...s, fill: e.target.value }))} title="Custom fill color" />
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {COLOR_PRESETS.map((color) => (
+                            <button key={`pf-${color}`} onClick={() => updateShapeById(quickImageTarget.id, (s) => ({ ...s, fill: color }))} className={`w-6 h-6 rounded-full border-2 transition-transform active:scale-90 ${quickImageTarget.fill === color ? 'border-white scale-110' : 'border-white/20'}`} style={{ backgroundColor: color }} title={color} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="border-t border-white/5 pt-3">
+                      <div className="flex justify-between text-[11px] text-gray-400">
+                        <span>Opacity</span>
+                        <span className="font-mono text-blue-300">{Math.round(quickImageTarget.opacity ?? 100)}%</span>
+                      </div>
+                      <input type="range" min={0} max={100} value={quickImageTarget.opacity ?? 100} onChange={(e) => updateShapeById(quickImageTarget.id, (s) => ({ ...s, opacity: Number(e.target.value) }))} className="w-full h-2 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                    </div>
+
+                    {quickImageTarget.type === 'line' && (
+                      <div className="border-t border-white/5 pt-3">
+                        <div className="flex justify-between text-[11px] text-gray-400">
+                          <span>Division count</span>
+                          <span className="font-mono text-blue-300">{(quickImageTarget.divisions || 1) + 1}</span>
+                        </div>
+                        <input type="range" min={1} max={6} step={1} value={quickImageTarget.divisions || 1} onChange={(e) => updateShapeById(quickImageTarget.id, (s) => ({ ...s, divisions: Number(e.target.value) }))} className="w-full h-2 bg-white/10 rounded-lg appearance-none accent-blue-500" />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button onClick={() => setImageQuickMenu(null)} className="flex-1 py-3 rounded-xl bg-white/5 text-gray-400 font-bold text-sm transition active:scale-95 hover:bg-white/10">Close</button>
+                  <button aria-label="Delete shape" onClick={() => { deleteShape(quickImageTarget.id); setImageQuickMenu(null); }} className="p-3 bg-red-500/10 text-red-500 rounded-xl active:bg-red-500/20 transition border border-red-500/10"><Trash2 size={22} /></button>
+                </div>
+
               </div>
-            )}
+            </div>
           </div>
         )}
       </div>
